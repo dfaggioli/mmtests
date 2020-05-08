@@ -1,0 +1,96 @@
+#!/bin/bash
+#
+# This script defines one or more VM from XML files.
+#
+# The list of the VM names is passed as first (and only) parameter, i.e.,
+# `--vm foo,bar`. If no `--vm` parameter is passed, it it assumed that there
+# will be one VM, whose name is either defined in $MARVIN_KVM_DOMAIN, or it's
+# 'marvin-mmtests'
+#
+# After that one of more instances of `--dir dirname` can be provided. XML
+# config files that are suitable for defining the VMs we need will be looked
+# for in those directories. We'll check the dirs in the order they're passed,
+# and stop at the first match.
+
+check_defined() {
+	virsh list --all | grep " $1 " &> /dev/null
+	return $?
+}
+
+check_config() {
+	# The xml file needs to exist, sure, but it also has to:
+        # - be a plain text file
+	# - contain a valid libvirt XML VM definition
+	# - define a VM with a name that matches the one we're dealing with
+	if [ -f $1 ] &&
+	   [[ "$(file "$1")" =~ ': ASCII text'$ ]] &&
+	   [[ "$(virt-xml-validate "$1" 2>&1)" =~ 'validates'$ ]] &&
+	   [ "$(xmllint --xpath 'string(//name)' $1)" = "$2" ]; then
+		return 0
+	fi
+	return 1
+}
+
+if [ "$MARVIN_KVM_DOMAIN" = "" ]; then
+	export MARVIN_KVM_DOMAIN="marvin-mmtests"
+fi
+
+if [ "$1" = "--vm" ]; then
+	VMS="$2"
+	shift 2
+else
+	VMS=$MARVIN_KVM_DOMAIN
+fi
+
+# We want to check all the directory we've been told to look in
+declare -a CFGDIRS
+while (($#))
+do
+	if [ "$1" = "--dir" ]; then
+		# Check the existance of the path in its exact form, and like
+		# it is a local directory. If neither exists, just skip it.
+		if [ -d $2 ] ; then
+			CFGDIRS+=( "$2" )
+		elif [ -d "./$2" ] ; then
+			CFGDIRS+=( "./$2" )
+		fi
+		shift 2
+	fi
+done
+
+for VM in $(tr ',' '\n' <<< "$VMS")
+do
+	if check_defined "$VM" ; then continue ; fi
+
+	echo "$VM not found: trying to look for a config file..."
+
+	# If the VM is not there already, let's try to define it. For that,
+	# we need to find a suitable XML config file in one of the directories
+	# we've been told to check.
+	VMXML=""
+	for DIR in ${CFGDIRS[@]}; do
+		declare -a XMLS
+
+		XMLS=( $(ls $DIR | grep -i xml$) )
+		for X in ${XMLS[@]}; do
+			if check_config "${DIR}/${X}" "$VM" ; then
+				VMXML="${DIR}/${X}"
+				break
+			fi
+		done
+
+		if [ ! -z "$VMXML" ]; then
+			echo "Match found! Defining $VM with $VMXML"
+			virsh define $VMXML
+			break
+		fi
+	done
+
+	# If we're here, the VM wasn't defined. Well, It must be by now,
+	# or we have a problem!
+	if ! check_defined "$VM" ; then
+		echo "ERROR: $VM not defined, and no suitable config file found"
+		exit 1
+	fi
+done
+exit 0

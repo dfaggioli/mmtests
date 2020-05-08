@@ -18,7 +18,7 @@ if [ "$MARVIN_KVM_DOMAIN" = "" ]; then
 fi
 
 usage() {
-	echo "$0 [-pkonmh] [-C CONFIG_HOST] [--vm VMNAME[,VMNAME][,...]]  run-mmtests-options"
+	echo "$0 [-pkonmDh] [-C CONFIG_HOST] [--vm VMNAME[,VMNAME][,...]] [--vm-xml-dir DIR[,DIR][,...]] run-mmtests-options"
 	echo
 	echo "-h|--help              Prints this help."
 	echo "-p|--performance       Force performance CPUFreq governor on the host before starting the tests"
@@ -28,9 +28,16 @@ usage() {
 	echo "-m|--run-monitor       Force enable monitoring on the host."
 	echo "-n|--no-monitor        Force disable monitoring on the host."
 	echo "-C|--config-host CFG   Use CFG as config file for the host."
-	echo "--vm VMNAME[,VMNAME]   Name(s) of existing, and already known to 'virsh', VM(s)."
+	echo "--vm VMNAME[,VMNAME]   Name(s) of the VMs where benchmarks will run. If they are"
+	echo "                       not defined already, there must be a config file (see -D)."
 	echo "                       If not specified, use \$MARVIN_KVM_DOMAIN as VM name."
 	echo "                       If that is not defined, use 'marvin-mmtests'."
+	echo "-D|--vm-xml-dir DIR,[...] Where to find the libvirt config files for the VMs that"
+	echo "                       are not defined already. A (coma separated) list of dirs"
+	echo "                       can be specified, and there can even be multiple instances of"
+	echo "                       this parameter. The main MMTests directory is always checked."
+	echo "                       Note that orders oof the directory matters, as MMTests will"
+	echo "                       stop scanning as soon as the first suitable config file is found."
 	echo "run-mmtests-options    Parameters for run-mmtests.sh inside the VM (check them"
 	echo "                       with ./run-mmtests.sh -h)."
 	echo ""
@@ -103,6 +110,15 @@ while true; do
 			VMS=$1
 			shift
 			;;
+		-D|--vm-xml-dir)
+			# We will pass this to kvm-define
+			DIRS=$(echo ${2// /,})
+			for DIR in $(tr ',' '\n' <<< "$DIRS")
+			do
+				VM_XML_DIR="$VM_XML_DIR --dir $DIR"
+			done
+			shift 2
+			;;
 		-h|--help)
 			usage
 			exit 0
@@ -142,6 +158,20 @@ done
 [ ! -z $CONFIGS ] || CONFIGS=( "$MMTESTS_CONFIGS" )
 
 import_configs
+
+# If the (host) config file specifies a place where to look for the guests
+# config files, make sure we look there. We add such path _after_ the ones
+# coming from command line (with -D|--vm-xml-dir).
+if [ ! -z $MMTESTS_VMS_XML_DIR ] ; then
+	DIRS=$(echo ${MMTESTS_VMS_XML_DIR// /,})
+	for DIR in $(tr ',' '\n' <<< "$DIRS")
+	do
+		VM_XML_DIR="$VM_XML_DIR --dir $DIR"
+	done
+fi
+# ... In any case, let's always check for config files in MMTests directory.
+VM_XML_DIR="$VM_XML_DIR --dir $SCRIPTDIR"
+
 
 # Command line has priority. However, if there wasn't any `--vm` param, check
 # if we have a list of VMs to use in the config files. If there's nothing
@@ -188,7 +218,7 @@ if [ ! -z $MMTESTS_HOST_IP ]; then
 	done
 fi
 
-install-depends time
+install-depends time libxml2-tools
 
 # Check host monitors
 if [ "$FORCE_RUN_MONITOR" != "" ]; then
@@ -271,6 +301,11 @@ declare -a GUEST_IP
 declare -a VM_RUNNAME
 
 if [ "$MMTESTS_VMS_IP" != "" ]; then
+	# We just have a bunch of IPs and names (which we don't even know if
+	# they're actual VMs or what!). We will try to ship mmtests to them
+	# and run the benchmarks inside, but we can't manage (i.e., define,
+	# create, start, stop, etc) them in any way...
+
 	# MMTESTS_VMS_IP is space separated, we want it to be comma separated
 	IPS=$(echo ${MMTESTS_VMS_IP// /,})
 
@@ -298,6 +333,15 @@ if [ "$MMTESTS_VMS_IP" != "" ]; then
 
 	[ $v -eq $i ] || die "MMTESTS_VMS and MMTESTS_VMS_IP mismatch"
 else
+	# Ok, we are in charge of fully managing the guests! Let's first of
+	# all see if all of them are defined already. If not, we will try to
+	# suitably define them, using some config files.
+	kvm-define --vm $VMS $VM_XML_DIR
+	if [ $? -ne 0 ]; then
+		echo "ERROR: could not prepare all the necessary VMs"
+		exit 1
+	fi
+
 	echo "Booting the VM(s)"
 	activity_log "run-kvm: Booting VMs"
 	kvm-start --vm $VMS || die "Failed to boot VM(s)"
