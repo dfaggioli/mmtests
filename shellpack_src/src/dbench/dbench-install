@@ -1,7 +1,6 @@
 #!/bin/bash
 # dbench installer
 ###SHELLPACK preamble dbench-install 0
-GIT_LOCATION=git://git.samba.org/sahlberg/dbench.git
 WEB_LOCATION=http://samba.org/ftp/tridge/dbench/
 MIRROR_LOCATION="$WEBROOT/dbench/"
 
@@ -13,7 +12,7 @@ install-depends libtirpc-devel
 ###SHELLPACK parseargEnd
 
 
-###SHELLPACK git_fetch dbench-${VERSION}.tar.gz dbench-${VERSION}
+###SHELLPACK sources_fetch dbench-${VERSION}.tar.gz dbench-${VERSION}
 
 # Build
 if [ "$VERSION" = "4.1alpha" ]; then
