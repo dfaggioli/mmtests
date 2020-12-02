@@ -51,6 +51,10 @@ while [ "$1" != "" ]; do
 		SORT_VERSION=yes
 		shift
 		;;
+	--monitors-only)
+		ONLY_MONITORS=yes
+		shift
+		;;
 	--help)
 		perldoc ${BASH_SOURCE[0]}
 		exit 0;
@@ -516,10 +520,6 @@ for SUBREPORT in $(run_report_name $KERNEL_BASE); do
 		cache-mmtests.sh compare-mmtests.pl -d . -b johnripper -a exectime -n $KERNEL_LIST $FORMAT_CMD
 		echo
 		;;
-	monitor)
-		echo No meaningful extraction script for monitor
-		echo
-		;;
 	nas*)
 		echo $SUBREPORT NAS Time
 		cache-mmtests.sh compare-mmtests.pl -d . -b $SUBREPORT -n $KERNEL_LIST $FORMAT_CMD
@@ -643,8 +643,16 @@ for SUBREPORT in $(run_report_name $KERNEL_BASE); do
 		cache-mmtests.sh compare-mmtests.pl -d . -b xfsio -a ops -n $KERNEL_LIST $FORMAT_CMD
 		;;
 	*)
-		echo $SUBREPORT
-		eval $COMPARE_CMD
+		if [ "$SUBREPORT" == "monitor" ]; then
+			echo No meaningful extraction script for monitor
+			echo
+		elif [ "$ONLY_MONITORS" == "yes" ]; then
+			echo $SUBREPORT but showing only monitors
+			echo
+		else
+			echo $SUBREPORT
+			eval $COMPARE_CMD
+		fi
 	esac
 	echo
 	eval $COMPARE_CMD --print-monitor duration
@@ -661,7 +669,6 @@ for SUBREPORT in $(run_report_name $KERNEL_BASE); do
 	if have_monitor_results perf-time-stat $KERNEL_BASE; then
 		eval $COMPARE_CMD --print-monitor perf-time-stat
 	fi
-
 	IOSTAT_GRAPH=no
 	TEST=
 	if have_monitor_results iostat $KERNEL_BASE; then
@@ -946,8 +953,6 @@ for SUBREPORT in $(run_report_name $KERNEL_BASE); do
 			;;
 		mlc)
 			;;
-		monitor)
-			;;
 		netpipe)
 			echo "<tr>"
 			generate_basic_single "$SUBREPORT Throughput"
@@ -1165,15 +1170,17 @@ for SUBREPORT in $(run_report_name $KERNEL_BASE); do
 		xfsrepair)
 			;;
 		*)
-			eval $GRAPH_PNG --title \"$SUBREPORT\" --output $OUTPUT_DIRECTORY/graph-$SUBREPORT
-			if [ -e $OUTPUT_DIRECTORY/graph-$SUBREPORT.png ]; then
-				if [ -e $OUTPUT_DIRECTORY/graph-$SUBREPORT-smooth.png ]; then
-					smoothover graph-$SUBREPORT
+			if [ "SUBREPORT" != "monitor" -a "$ONLY_MONITORS" != "yes" ]; then
+				eval $GRAPH_PNG --title \"$SUBREPORT\" --output $OUTPUT_DIRECTORY/graph-$SUBREPORT
+				if [ -e $OUTPUT_DIRECTORY/graph-$SUBREPORT.png ]; then
+					if [ -e $OUTPUT_DIRECTORY/graph-$SUBREPORT-smooth.png ]; then
+						smoothover graph-$SUBREPORT
+					else
+						plain graph-$SUBREPORT
+					fi
 				else
-					plain graph-$SUBREPORT
+					echo "<tr><td>No graph representation</td></tr>"
 				fi
-			else
-				echo "<tr><td>No graph representation</td></tr>"
 			fi
 		esac
 		echo "</table>"
@@ -1852,6 +1859,8 @@ for SUBREPORT in $(run_report_name $KERNEL_BASE); do
 		if have_monitor_results mpstat $KERNEL_BASE; then
 			echo "<table>"
 			echo "<tr>"
+			# We also need perl-Math-Gradient !
+			install-depends perl-GD ghostscript-fonts-std
 			for KERNEL in $KERNEL_LIST_ITER; do
 				rm -f $OUTPUT_DIRECTORY/graph-$SUBREPORT-$KERNEL-mpstat.png
 				visualise-log.pl -b gd							\
