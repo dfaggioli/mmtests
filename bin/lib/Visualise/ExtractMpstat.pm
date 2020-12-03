@@ -71,18 +71,18 @@ sub parseOne() {
 
 	while (!eof($input)) {
 		$line = <$input>;
+		$line =~ s/([0-9]{2,}:[0-9]{2,}:[0-9]{2,}(.[AP]M)?)\s+//;
 		next if $line =~ /%idle/;
 		next if $line =~ /all/;
 		next if $line =~ /^Linux/;
 		last if $line =~ /^$/;
-
 		my @elements = split(/\s+/, $line);
 		my $value = 100 - $elements[-1];
 		if ($expected_elements == -1) {
 			$expected_elements = $#elements;
 		}
 		if ($first_cpu == -1) {
-			$first_cpu = $elements[1];
+			$first_cpu = $elements[0];
 		}
 		if ($start) {
 			$start = 0;
@@ -91,17 +91,16 @@ sub parseOne() {
 			$expected_cpu = $first_cpu - 1;
 		}
 		$expected_cpu++;
-		if ($elements[1] != $expected_cpu) {
-			if ($elements[1] == $first_cpu) {
+		if ($elements[0] != $expected_cpu) {
+			if ($elements[0] == $first_cpu) {
 				$expected_cpu = $first_cpu - 1;
 			}
 		}
 		next if ($expected_elements != $#elements);
-		next if ($elements[0] !~ /^[0-9][0-9]:/);
-		next if ($elements[1] != $expected_cpu);
-		next if ($elements[1] !~ (/^-?\d+$/));
-		next if ($elements[1] =~ /^0\d/);
-		$container->setValue("cpu $elements[1]", $value);
+		next if ($elements[0] != $expected_cpu);
+		next if ($elements[0] !~ (/^-?\d+$/));
+		next if ($elements[0] =~ /^0\d/);
+		$container->setValue("cpu $elements[0]", $value);
 	}
 	$container->propogateValues();
 	return !eof($input);
