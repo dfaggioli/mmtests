@@ -1,0 +1,14 @@
+# MM Test Parameters
+export MMTESTS="custom-bench"
+#export MMTEST_ITERATIONS=10
+
+# List of monitors
+export RUN_MONITOR=yes
+export MONITORS_ALWAYS=
+export MONITORS_GZIP="proc-vmstat top mpstat"
+export MONITORS_WITH_LATENCY="vmstat iostat"
+export MONITOR_UPDATE_FREQUENCY=10
+
+export CUSTOM_BENCH_ITERATIONS=3
+export CUSTOM_BENCH_NAME="sleep"
+export CUSTOM_BENCH_CMD="sleep 30"

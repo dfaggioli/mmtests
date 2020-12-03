@@ -1,0 +1,26 @@
+#!/bin/bash
+###SHELLPACK preamble custom-bench 0
+
+###SHELLPACK parseargBegin
+###SHELLPACK parseargParam   --name BENCHNAME
+###SHELLPACK parseargParam   --iterations ITERATIONS
+###SHELLPACK parseargParam   --cmd BENCHCMD
+###SHELLPACK parseargEnd
+
+###SHELLPACK init_complete
+###SHELLPACK monitor_hooks
+
+monitor_pre_hook $LOGDIR_RESULTS $BENCHNAME
+
+###SHELLPACK iteration_begin $ITERATIONS
+	echo Starting $BENCHNAME iteration $ITERATION/$ITERATIONS
+	mmtests_activity $BENCHNAME-$ITERATION
+
+	eval $BENCHCMD 2>&1 | tee $LOGDIR_RESULTS/$BENCHNAME-$ITERATION.log
+	RET=${PIPESTATUS[0]}
+
+###SHELLPACK iteration_end
+
+monitor_post_hook $LOGDIR_RESULTS $BENCHNAME
+
+exit $RET
