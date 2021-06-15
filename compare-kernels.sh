@@ -67,6 +67,13 @@ while [ "$1" != "" ]; do
 	esac
 done
 
+OUT=/dev/stdout
+if [ ! -t 1 ]; then
+	OUT=/tmp/compare-kernel.sh.out
+fi
+
+install-depends perl-List-BinarySearch &> $OUT
+
 if [ "$CACHE_MMTESTS" != "" ]; then
 	mkdir -p $CACHE_MMTESTS
 	if [ -e $CACHE_MMTESTS/current_update ]; then
