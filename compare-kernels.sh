@@ -74,6 +74,11 @@ fi
 
 install-depends perl-List-BinarySearch &> $OUT
 
+if [ "$FORMAT" = "html" ]; then
+	install-depends gnuplot &> $OUT
+	install-depends perl-GD &> $OUT
+fi
+
 if [ "$CACHE_MMTESTS" != "" ]; then
 	mkdir -p $CACHE_MMTESTS
 	if [ -e $CACHE_MMTESTS/current_update ]; then
