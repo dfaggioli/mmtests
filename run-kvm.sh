@@ -10,7 +10,11 @@ export EXPECT_UNBUFFER=$SCRIPTDIR/bin/unbuffer
 . $SCRIPTDIR/shellpacks/common-config.sh
 . $SCRIPTDIR/shellpacks/monitors.sh
 
-MMTESTS_SSH_OPTIONS="$MMTESTS_SSH_CONFIG_OPTIONS -o StrictHostKeyChecking=no -o ForwardAgent=no -o ForwardX11=no"
+# XXX
+if [ -z $MMTESTS_VMS_SSHKEY ]; then
+	export MMTESTS_VMS_SSHKEY=${SCRIPTDIR}/mmtests_vms_sshkey
+fi
+MMTESTS_SSH_OPTIONS="$MMTESTS_SSH_CONFIG_OPTIONS -o StrictHostKeyChecking=no -o ForwardAgent=no -o ForwardX11=no -o IdentitiesOnly=yes -o IdentityFile=${MMTESTS_VMS_SSHKEY}"
 MMTESTS_PSSH_OPTIONS="$MMTESTS_PSSH_CONFIG_OPTIONS -t 0 $(echo $MMTESTS_SSH_OPTIONS|sed s/-o/-O/g)"
 
 if [ "$MARVIN_KVM_DOMAIN" = "" ]; then
@@ -303,6 +307,32 @@ activity_log "run-kvm: Start"
 start_numad
 start_tuned
 
+# Takes a coma separated list of scripts to run
+function run_vm_hooks() {
+	local CMD
+	declare -a SCRIPTS
+	if [ -z $1 ]; then
+		return
+	fi
+
+	PREV_IFS=$IFS
+	IFS=', ' read -r -a SCRIPTS <<< "$1"
+	IFS=$PREV_IFS
+
+	for SCRPT in "${SCRIPTS[@]}"
+	do
+		if [ "$(command -v $SCRIPT)" = "" ]; then CMD="$SCRPT $VMS"
+		elif [ -x "${SCRIPTDIR}/$SCRPT" ]; then CMD="${SCRIPTDIR}/$SCRPT $VMS"
+		else continue
+		fi
+
+		# We run each script in the list and pass to them the
+		# full list of VMs.
+		echo "Executing script: $CMD"
+		$CMD
+	done
+}
+
 teststate_log "start :: `date +%s`"
 
 # We need to be able to reach the guest at the port we use for guest-host
@@ -321,6 +351,7 @@ firewall_whitelist_ip() {
 # results would overwrite each other.
 declare -a GUEST_IP
 declare -a VM_RUNNAME
+PSSH_H_OPTS=
 
 if [ "$MMTESTS_VMS_IP" != "" ]; then
 	# We just have a bunch of IPs and names (which we don't even know if
@@ -377,14 +408,25 @@ else
 
 	echo "Booting the VM(s)"
 	activity_log "run-kvm: Booting VMs"
-	kvm-start --vm $VMS || die "Failed to boot VM(s)"
+	kvm-start --skip-ssh-check --vm $VMS || die "Failed to boot VM(s)"
 
 	teststate_log "VMs up :: `date +%s`"
+
+	# XXX All VMs should be up and running now, so this is a good time for doing
+	# changes for which we need to interact with them. An example could be
+	# configuring passwordless SSH login, or maybe even install stuff inside
+	# of them that requires a reboot (e.g., a specific kernel).
+	#
+	# XXX In fact, it is ok if these scripts reboot one or more VMs. What's
+	# important is that all the VMs are (back) up, running and reachable,
+	# right afterwords.
+	run_vm_hooks kvm-ssh,$MMTESTS_POST_VM_START_SCRIPTS
 
 	v=1
 	for VM in $(tr ',' '\n' <<< "$VMS")
 	do
 		GUEST_IP[$v]=`kvm-ip-address --vm $VM`
+		wait_ssh_available ${GUEST_IP[$v]}
 		echo "VM ready: $VM IP: ${GUEST_IP[$v]}"
 		SSH_HOST="root@${GUEST_IP[$v]}"
 		PSSH_HOSTS+=" -H $SSH_HOST"
