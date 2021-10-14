@@ -56,6 +56,9 @@ export AUTO_PACKAGE_INSTALL="yes"
 # The `tuned` that will be used on the host
 #export MMTESTS_TUNED_PROFILE="latency-performance"
 
+# XXX
+#export MMTESTS_VMS_SSHKEY=./mmtests_vms_sshkey
+
 # List of monitors for the host
 export RUN_MONITOR=yes
 export MONITORS_ALWAYS="top"

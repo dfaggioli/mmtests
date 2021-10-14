@@ -1,0 +1,106 @@
+#!/bin/bash -x
+#
+# We want public key based, passwordless root login for all VMs.
+# We may or may not be in control of the image used. If we are, and can
+# somehow put the necessary keys there in the first place, then great...
+# And, in that case, we don't need this script!
+#
+# In case, on the other hand, that we can't, the purpose of this script
+# is to ship the SSH key in place via SSH itself. In order for that to
+# be possible, we need to login with a password, at least this one time.
+#
+# That, of course, means that the VM must have root SSH password and key
+# login enabled.
+
+# This script is meant to be called as an "hook", from run-kvm.sh.
+# That means we get one parameter: the (coma separated) list of all VMs
+# we're trying to run the benchmark in.
+VMS=$1
+
+install-depends sshpass
+
+[[ $MMTESTS_SSH_OPTIONS ]] || MMTESTS_SSH_OPTIONS="$MMTESTS_SSH_CONFIG_OPTIONS -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ForwardAgent=no -o ForwardX11=no -o IdentitiesOnly=yes -o IdentityFile=${MMTESTS_VMS_SSHKEY}"
+
+# Check if passwordless, public-key based root login to a given IP works.
+# Returns "worked" or "failed".
+check_login () {
+	local IP=$1
+	ssh ${MMTESTS_SSH_OPTIONS} -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no \
+		-o PreferredAuthentications=publickey root@${IP} 'exit' &> /dev/null
+	return $?
+}
+
+# As of now, run-kvm.sh connects to the VMs (for running run-mmtests.sh
+# inside of them) as root. That's, therefore, the only user we need to setup
+# passwordless login for.
+#
+# As a root password, for copying the key in place, we use, in this order:
+# - the value of a variable named MMTESTS_<vmname>_PASSWORD, if defined.
+#   E.g., if the VM is called vm1, we'll use ${MMTESTS_vm1_PASSWORD};
+# - the content of a file named .mmtests_<vmname>_password, inside of the
+#   main MMTests directory (on the host, of course). E.g., if the VM is
+#   called vm1, we'll use .mmtests_vm1_password;
+# - the value of MMTESTS_VMS_PASSWORD, if defined;
+# - the content of a file named .mmtests_vms_password, inside of the main
+#   MMTests directory;
+# - the word 'test'.
+PASSWORD="test"
+if [ -f ${SCRIPTDIR}/.mmtests_vms_password ]; then
+	PASSWORD=$(cat ${SCRIPTDIR}/.mmtests_vms_password)
+fi
+if [ ! -z $MMTESTS_VMS_PASSWORD ]; then
+	PASSWORD="$MMTESTS_VMS_PASSWORD"
+fi
+
+# For the actual SSH key that will be used _for_all_VMs_, we use a key file
+# the path of which is specified as the value of $MMTESTS_VMS_SSHKEY. If such
+# file exists already, we use it, otherwise, we create a new key in it.
+setup_key () {
+	local NAME="$1"
+	local IP="$2"
+
+	# XXX check works alrady
+	if check_login "$IP" ; then
+		echo "Logging in to $NAME with $MMTESTS_VMS_SSHKEY key: already configured"
+		return
+	fi
+
+	# Let's create a key, if it is not there already. If it is, we use it,
+	# assuming it had been created without a passphrase (or things won't
+	# work!).
+	if [ -f $MMTESTS_VMS_SSHKEY ]; then
+		# TODO: Check it's actually a passphrase-less key?
+		echo "$MMTESTS_VMS_SSHKEY found"
+	else
+		ssh-keygen -f $MMTESTS_VMS_SSHKEY -t rsa -N ''
+	fi
+
+	if [ -f ${SCRIPTDIR}/.mmtests_${NAME}_password ]; then
+		PASSWORD=$(cat .mmtests_${NAME}_password)
+	fi
+	if [ ! -z $(eval "echo \$MMTESTS_${NAME}_PASSWORD") ]; then
+		PASSWORD=$(eval "echo \$MMTESTS_${NAME}_PASSWORD")
+	fi
+
+	sshpass -p "$PASSWORD" ssh-copy-id ${MMTESTS_SSH_OPTIONS} -o PreferredAuthentications=password -o PubkeyAuthentication=no -i ${MMTESTS_VMS_SSHKEY}.pub root@${IP}
+	if [ $? -ne 0 ]; then
+		echo "ERROR: Failed to copy ${MMTESTS_VMS_SSHKEY}.pub to $NAME (IP: $IP)"
+		exit -1
+	fi
+
+	if ! check_login "$IP" ; then
+		echo "ERROR: Failed settin up passwordless root login for $NAME (IP: $IP)"
+		exit -1
+	fi
+}
+
+# VMs need to be running for checking and then setting up SSH login
+#kvm-start --vm "$VMS" --skip-ssh-check
+
+for VM in $(tr ',' '\n' <<< "$VMS")
+do
+	IP="$(kvm-ip-address --vm $VM)"
+	wait_ssh_available $IP
+	setup_key $VM $IP
+done
+exit 0
