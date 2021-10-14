@@ -67,6 +67,27 @@ export MARVIN_KVM_DOMAIN="marvin_mmtests"
 # The `tuned` that will be used on the host
 #export MMTESTS_TUNED_PROFILE="latency-performance"
 
+# File that contains the SSH key used to login inside of the VMs without
+# password. It can exist already but, if it doesn't, it's generated. Note
+# the key must be "passphrase-less", or things won't work.
+#export MMTESTS_VMS_SSHKEY=./mmtests_vms_sshkey
+
+# As of now, run-kvm.sh connects to the VMs (for running run-mmtests.sh
+# inside of them) as root. That's, therefore, the only user we need to setup
+# passwordless login for.
+#
+# As root password, for copying the key in place, we'll try, in this order:
+# - the value of a variable named MMTESTS_<vmname>_PASSWORD, if defined.
+#   E.g., if the VM is called vm1, we'll use ${MMTESTS_vm1_PASSWORD};
+# - the content of a file named .mmtests_<vmname>_password, inside of the
+#   main MMTests directory. E.g., if the VM is called vm1, we'll use
+#   .mmtests_vm1_password;
+# - the value of MMTESTS_VMS_PASSWORD, if defined;
+# - the content of a file named .mmtests_vms_password, inside of the main
+#   MMTests directory;
+# - the word 'test'.
+#MMTESTS_VMS_PASSWORD="test"
+
 # List of monitors for the host
 export RUN_MONITOR=yes
 export MONITORS_ALWAYS="top"
