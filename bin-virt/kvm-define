@@ -60,7 +60,27 @@ done
 
 for VM in $(tr ',' '\n' <<< "$VMS")
 do
-	if check_defined "$VM" ; then continue ; fi
+	if check_defined "$VM" ; then
+		if [ "$MMTESTS_VMS_UNDEF_BEFORE_START" = "yes" ]; then
+			[ "$MMTESTS_VMS_UNDEF_REMOVE_STORAGE" = "yes" ] && STORAGE="--remove-all-storage"
+			for i in {1..3}; do
+				echo "Undefining existing VM: $VM (attempt $i)"
+				if kvm-check-running "$VM" ; then
+					echo " $VM is actually running. Trying to stop it first..."
+					kvm-stop --vm "$VM"
+				fi
+				virsh undefine $STORAGE "$VM" &> /dev/null || virsh undefine $STORAGE --nvram "$VM" &> /dev/null
+				if ! check_defined "$VM" ; then break ; fi
+			done
+			if check_defined "$VM" ; then
+				echo "ERROR: failed to remove $VM from the system"
+				exit 1
+			fi
+			echo "$VM has been undefined"
+		else
+			continue
+		fi
+	fi
 
 	echo "$VM not found: trying to look for a config file..."
 
