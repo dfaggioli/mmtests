@@ -60,7 +60,7 @@ done
 
 for VM in $(tr ',' '\n' <<< "$VMS")
 do
-	if check_defined "$VM" ; then
+	if kvm-check-defined "$VM" ; then
 		if [ "$MMTESTS_VMS_UNDEF_BEFORE_START" = "yes" ]; then
 			[ "$MMTESTS_VMS_UNDEF_REMOVE_STORAGE" = "yes" ] && STORAGE="--remove-all-storage"
 			for i in {1..3}; do
@@ -70,9 +70,9 @@ do
 					kvm-stop --vm "$VM"
 				fi
 				virsh undefine $STORAGE "$VM" &> /dev/null || virsh undefine $STORAGE --nvram "$VM" &> /dev/null
-				if ! check_defined "$VM" ; then break ; fi
+				if ! kvm-check-defined "$VM" ; then break ; fi
 			done
-			if check_defined "$VM" ; then
+			if kvm-check-defined "$VM" ; then
 				echo "ERROR: failed to remove $VM from the system"
 				exit 1
 			fi
@@ -106,11 +106,8 @@ do
 		fi
 	done
 
-	# If we're here, the VM wasn't defined. Well, It must be by now,
-	# or we have a problem!
-	if ! check_defined "$VM" ; then
-		echo "ERROR: $VM not defined, and no suitable config file found"
-		exit 1
+	if ! kvm-check-defined "$VM" ; then
+		echo "$VM not defined yet"
 	fi
 done
 exit 0

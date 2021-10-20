@@ -50,6 +50,21 @@ export AUTO_PACKAGE_INSTALL="yes"
 # config file that we find.
 #export MMTESTS_VMS_XML_DIR=
 
+# If `numad` should be used on the host
+#export MMTESTS_NUMA_POLICY="numad"
+
+# The `tuned` that will be used on the host
+#export MMTESTS_TUNED_PROFILE="latency-performance"
+
+# List of monitors for the host
+export RUN_MONITOR=yes
+export MONITORS_ALWAYS="top"
+export MONITORS_GZIP="proc-vmstat mpstat"
+export MONITORS_WITH_LATENCY="vmstat"
+export MONITORS_TRACER="perf-event-stat"
+export MONITOR_PERF_EVENTS=cpu-migrations,context-switches
+export MONITOR_UPDATE_FREQUENCY=10
+
 # If the VMs are up already, and we know their IPs, we can
 # use them directly. Note that this means:
 # - run-kmv.sh will not (try to) power on the VMs, it will
@@ -65,17 +80,35 @@ export AUTO_PACKAGE_INSTALL="yes"
 #export MMTESTS_VMS_IP="192.168.122.24 192.168.122.38"
 #export MMTESTS_VMS="vm_a vm_b"
 
-# If `numad` should be used on the host
-#export MMTESTS_NUMA_POLICY="numad"
+# List of VMs inside which to run the tests
+# (if not specified via command line)
+#export MMTESTS_VMS="vm1 vm2"
 
-# The `tuned` that will be used on the host
-#export MMTESTS_TUNED_PROFILE="latency-performance"
+# The location of config files for guests (e.g., libvirt xml
+# config files for VMs) that are not defined already when
+# starting the benchmark and that MMTests have then to create,
+# can be speficied in this variable. Note that, If using both
+# this variable and the --vm-cfg-path command line switch, the
+# latter will have priority. And, as a last resort, we will
+# also always check in MMTests directory.
+#export MMTESTS_VMS_CFG_DIR=
 
-# List of monitors for the host
-export RUN_MONITOR=yes
-export MONITORS_ALWAYS="top"
-export MONITORS_GZIP="proc-vmstat mpstat"
-export MONITORS_WITH_LATENCY="vmstat"
-export MONITORS_TRACER="perf-event-stat"
-export MONITOR_PERF_EVENTS=cpu-migrations,context-switches
-export MONITOR_UPDATE_FREQUENCY=10
+# XXX
+#export MMTESTS_VMS_COPY_DISK_FILE=/vmimages/vms.disk
+
+# XXX Guests configurations
+#
+# XXX For all VMs / Defaults, for installing
+#MMTESTS_VMS_INSTALL_LOCATION=
+#MMTESTS_VMS_AUTOYAST_DIR=
+#MMTESTS_VMS_AUTOYAST=
+#MMTESTS_VMS_DEPLOY_DISTRO=
+
+# XXX For all VMs / Defaults, for VM config
+#MMTESTS_VMS_MEMORY=
+#MMTESTS_VMS_CPUS=
+#MMTESTS_VMS_DISK_FILE_SIZE=
+#MMTESTS_VMS_DISK_POOL=
+
+export vmtest1_CPUS=4
+export vmtest1_MEMORY=4096
