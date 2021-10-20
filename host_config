@@ -30,6 +30,17 @@ export AUTO_PACKAGE_INSTALL="yes"
 #export MMTESTS_HOST_PORT=1234
 #export MMTESTS_GUEST_PORT=4321
 
+# If we find already defined VMs in the system, shall we undefine them and
+# (try to) re-create them from scratch? By default, we do *NOT* do that, and
+# just use it. If, instead, they should be deleted and re-created from scratch
+# set MMTESTS_VMS_UNDEF_BEFORE_START to "yse".
+#
+# Setting MMTESTS_VMS_UNDEF_REMOVE_STORAGE to "yes" as well, will make sure
+# that not only the existing VM is undefined, but its storage is also removed
+# (and, presumibly, recreated).
+#export MMTESTS_VMS_UNDEF_BEFORE_START="yes"
+#export MMTESTS_VMS_UNDEF_REMOVE_STORAGE="yes"
+
 # The location of config files for guests (e.g., libvirt xml config files for
 # VMs) that are not defined already when starting the benchmark can be listed
 # in this variable. They will then be read and an attempt to define such VMs
