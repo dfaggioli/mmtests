@@ -1,0 +1,295 @@
+<profile xmlns="http://www.suse.com/1.0/yast2ns" xmlns:config="http://www.suse.com/1.0/configns">
+  <general>
+    <ask-list config:type="list"/>
+    <mode>
+      <confirm config:type="boolean">false</confirm>
+      <second_stage config:type="boolean">false</second_stage>
+      <forceboot config:type="boolean">false</forceboot>
+      <final_reboot config:type="boolean">true</final_reboot>
+    </mode>
+    <proposals config:type="list"/>
+    <signature-handling>
+      <accept_file_without_checksum config:type="boolean">true</accept_file_without_checksum>
+      <accept_non_trusted_gpg_key config:type="boolean">true</accept_non_trusted_gpg_key>
+      <accept_unknown_gpg_key config:type="boolean">true</accept_unknown_gpg_key>
+      <accept_unsigned_file config:type="boolean">true</accept_unsigned_file>
+      <accept_verification_failed config:type="boolean">false</accept_verification_failed>
+      <import_gpg_key config:type="boolean">true</import_gpg_key>
+    </signature-handling>
+    <storage>
+      <start_multipath config:type="boolean">false</start_multipath>
+    </storage>
+  </general>
+  <keyboard>
+    <keyboard_values>
+      <delay/>
+      <discaps config:type="boolean">false</discaps>
+      <numlock>bios</numlock>
+      <rate/>
+    </keyboard_values>
+    <keymap>english-us</keymap>
+  </keyboard>
+  <language>
+    <language>en_US</language>
+  </language>
+  <networking>
+    <dns>
+      <hostname>guest</hostname>
+      <dhcp_hostname config:type="boolean">true</dhcp_hostname>
+      <resolv_conf_policy>auto</resolv_conf_policy>
+    </dns>
+    <dhcp_options>
+      <dhclient_client_id/>
+      <dhclient_hostname_option>AUTO</dhclient_hostname_option>
+    </dhcp_options>
+    <keep_install_network config:type="boolean">true</keep_install_network>
+    <managed config:type="boolean">false</managed>
+    <routing>
+      <ip_forward config:type="boolean">false</ip_forward>
+    </routing>
+  </networking>
+  <bootloader>
+    <global>
+      <activate>true</activate>
+      <boot_boot>true</boot_boot>
+      <boot_extended>false</boot_extended>
+      <boot_mbr>true</boot_mbr>
+      <boot_root>false</boot_root>
+      <generic_mbr>false</generic_mbr>
+      <hiddenmenu>false</hiddenmenu>
+      <timeout config:type="integer">8</timeout>
+    </global>
+  </bootloader>
+  <firewall>
+    <enable_firewall config:type="boolean">false</enable_firewall>
+    <start_firewall config:type="boolean">false</start_firewall>
+  </firewall>
+  <ntp-client>
+    <ntp_policy>auto</ntp_policy>
+    <ntp_servers config:type="list">
+      <ntp_server>
+        <address>0.pool.ntp.org</address>
+        <iburst config:type="boolean">true</iburst>
+        <offline config:type="boolean">false</offline>
+      </ntp_server>
+      <ntp_server>
+        <address>1.pool.ntp.org</address>
+        <iburst config:type="boolean">false</iburst>
+        <offline config:type="boolean">false</offline>
+      </ntp_server>
+      <ntp_server>
+        <address>2.pool.ntp.org</address>
+        <iburst config:type="boolean">false</iburst>
+        <offline config:type="boolean">false</offline>
+      </ntp_server>
+    </ntp_servers>
+    <ntp_sync>15</ntp_sync>
+  </ntp-client>
+  <partitioning config:type="list">
+    <drive>
+      <initialize config:type="boolean">true</initialize>
+      <disklabel>gpt</disklabel>
+      <use>all</use>
+      <partitions config:type="list">
+        <partition>
+          <mount>/boot/efi</mount>
+          <label>efi</label>
+          <size>512MB</size>
+          <partition_nr config:type="integer">1</partition_nr>
+          <format config:type="boolean">true</format>
+          <filesystem config:type="symbol">vfat</filesystem>
+        </partition>
+        <partition>
+          <mount>swap</mount>
+          <size>auto</size>
+          <partition_nr config:type="integer">2</partition_nr>
+        </partition>
+        <partition>
+          <mount>/</mount>
+          <label>ROOT</label>
+          <size>max</size>
+          <filesystem config:type="symbol">btrfs</filesystem>
+          <format config:type="boolean">true</format>
+          <partition_nr config:type="integer">3</partition_nr>
+        </partition>
+      </partitions>
+    </drive>
+  </partitioning>
+  <report>
+    <errors>
+      <log config:type="boolean">true</log>
+      <show config:type="boolean">true</show>
+      <timeout config:type="integer">0</timeout>
+    </errors>
+    <messages>
+      <log config:type="boolean">true</log>
+      <show config:type="boolean">true</show>
+      <timeout config:type="integer">30</timeout>
+    </messages>
+    <warnings>
+      <log config:type="boolean">true</log>
+      <show config:type="boolean">true</show>
+      <timeout config:type="integer">30</timeout>
+    </warnings>
+    <yesno_messages>
+      <log config:type="boolean">true</log>
+      <show config:type="boolean">true</show>
+      <timeout config:type="integer">30</timeout>
+    </yesno_messages>
+  </report>
+  <services-manager>
+    <default_target>multi-user</default_target>
+    <services>
+      <enable config:type="list">
+        <service>sshd</service>
+      </enable>
+      <disable config:type="list">
+        <service>nscd</service>
+	<service>smart</service>
+      </disable>
+    </services>
+  </services-manager>
+  <software>
+    <products config:type="list">
+      <product>openSUSE</product>
+    </products>
+    <patterns config:type="list">
+      <pattern>base</pattern>
+      <pattern>console</pattern>
+      <pattern>devel_C_C++</pattern>
+      <pattern>devel_basis</pattern>
+      <pattern>devel_kernel</pattern>
+      <pattern>enhanced_base</pattern>
+      <pattern>sw_management</pattern>
+      <pattern>yast2_basis</pattern>
+    </patterns>
+    <packages config:type="list">
+      <package>at</package>
+      <package>autoyast2-installation</package>
+      <package>autoyast2</package>
+      <package>bc</package>
+      <package>biosdevname</package>
+      <package>btrfsprogs</package>
+      <package>emacs</package>
+      <package>emacs</package>
+      <package>gzip</package>
+      <package>ipmitool</package>
+      <package>mc</package>
+      <package>nmap</package>
+      <package>nmap</package>
+      <package>openssh-clients</package>
+      <package>openssh-server</package>
+      <package>shadow</package>
+      <package>smartmontools</package>
+      <package>tar</package>
+      <package>zsh</package>
+    </packages>
+  </software>
+  <timezone>
+    <hwclock>UTC</hwclock>
+    <timezone>Europe/Berlin</timezone>
+  </timezone>
+  <scripts>
+    <chroot-scripts config:type="list">
+      <!-- Try to update everything -->
+      <script>
+        <chrooted config:type="boolean">true</chrooted>
+        <filename>update-all.sh</filename>
+        <source><![CDATA[#!/bin/sh
+          zypper ref
+          zypper dup -y --no-recommends
+        ]]></source>
+      </script>
+      <!-- Enable SSH root login -->
+      <script>
+        <chrooted config:type="boolean">true</chrooted>
+        <filename>permit-rootlogin.sh</filename>
+        <source><![CDATA[#!/bin/sh
+          if [ -d /etc/sshd/sshd_config.d ]; then
+            echo "PermitRootLogin yes" > /etc/sshd/sshd_config.d/root_login.conf
+          else
+            if [ -f /etc/ssh/sshd_config ]; then SSHD_CFG=/etc/ssh/sshd_config
+            elif [ -f /usr/etc/ssh/sshd_config ]; then SSHD_CFG=/usr/etc/ssh/sshd_config
+          fi
+          sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' $SSHD_CFG
+          fi
+          exit 0
+        ]]></source>
+      </script>
+    </chroot-scripts>
+    <init-scripts config:type="list">
+      <!-- <script>
+        # Do perhaps we need to retrieve scripts from somewhere in the network?
+        <filename>addon=scripts.sh</filename>
+        <debug config:type="boolean">false</debug>
+        <location/>
+        <source><![CDATA[#!/bin/sh
+          mkdir /tmp/scripts
+          cd /tmp/scripts
+          wget http://laplace.suse.de/scripts/after_install.sh
+          sh after_install.sh
+          rm -fr /tmp/scripts
+        ]]></source>
+      </script> -->
+      <script>
+        <!-- this script makes sure sshd gets started even if autoyast or systemd fail -->
+        <filename>re-enable-ssh.sh</filename>
+        <source><![CDATA[#!/bin/sh
+          systemctl enable sshd && systemctl start sshd
+        ]]></source>
+      </script>
+    </init-scripts>
+  </scripts>
+  <sysconfig config:type="list">
+    <sysconfig_entry>
+      <sysconfig_key>ENABLE_SYSRQ</sysconfig_key>
+      <sysconfig_path>/etc/sysconfig/sysctl</sysconfig_path>
+      <sysconfig_value>yes</sysconfig_value>
+    </sysconfig_entry>
+    <sysconfig_entry>
+      <sysconfig_key>HWCLOCK</sysconfig_key>
+      <sysconfig_path>/etc/sysconfig/clock</sysconfig_path>
+      <sysconfig_value>-u</sysconfig_value>
+    </sysconfig_entry>
+    <sysconfig_entry>
+      <sysconfig_key>MAX_DAYS_IN_TMP</sysconfig_key>
+      <sysconfig_path>/etc/sysconfig/cron</sysconfig_path>
+      <sysconfig_value>7</sysconfig_value>
+    </sysconfig_entry>
+    <sysconfig_entry>
+      <sysconfig_key>TMP_DIRS_TO_CLEAR</sysconfig_key>
+      <sysconfig_path>/etc/sysconfig/cron</sysconfig_path>
+      <sysconfig_value>/tmp /var/tmp</sysconfig_value>
+    </sysconfig_entry>
+    <sysconfig_entry>
+      <sysconfig_key>SOFTCORELIMIT</sysconfig_key>
+      <sysconfig_path>/etc/sysconfig/ulimit</sysconfig_path>
+      <sysconfig_value>unlimited</sysconfig_value>
+    </sysconfig_entry>
+    <sysconfig_entry>
+      <sysconfig_key>UPDATEDB_PRUNEPATHS</sysconfig_key>
+      <sysconfig_path>/etc/sysconfig/locate</sysconfig_path>
+      <sysconfig_value>/mnt /cdrom /tmp /usr/tmp /var/tmp /var/spool /proc /media /sys</sysconfig_value>
+    </sysconfig_entry>
+  </sysconfig>
+  <user_defaults>
+    <group>100</group>
+    <groups>video,dialout</groups>
+    <home>/home</home>
+    <inactive>-1</inactive>
+    <shell>/bin/bash</shell>
+    <skel>/etc/skel</skel>
+  </user_defaults>
+  <users config:type="list">
+    <user>
+      <encrypted config:type="boolean">false</encrypted>
+      <fullname>root</fullname>
+      <gid>0</gid>
+      <home>/root</home>
+      <shell>/bin/bash</shell>
+      <uid>0</uid>
+      <username>root</username>
+      <user_password>test</user_password>
+    </user>
+  </users>
+</profile>

@@ -21,6 +21,11 @@ fi
 TIMEOUT=600
 for VM in $(tr ',' '\n' <<< "$VMS")
 do
+	if ! kvm-check-defined "$VM" ; then
+		echo "ERROR: cannot start $VM as it is not defined"
+		exit -1
+	fi
+
 	if kvm-check-running "$VM" ; then
 		echo $VM already running according to virsh
 		GUEST_IP=`kvm-ip-address --vm $VM 0`
