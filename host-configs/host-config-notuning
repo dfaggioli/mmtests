@@ -1,0 +1,2 @@
+# We often want deterministic performance
+cpupower frequency-set -g performance

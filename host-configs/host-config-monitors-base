@@ -1,0 +1,5 @@
+# List of monitors that are typically useful in a virt. host
+export RUN_MONITOR=yes
+export MONITORS_GZIP="proc-vmstat mpstat"
+export MONITORS_WITH_LATENCY="vmstat"
+export MONITOR_UPDATE_FREQUENCY=10

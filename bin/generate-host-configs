@@ -1,0 +1,223 @@
+#!/bin/bash
+#set ${MMTESTS_SH_DEBUG:-+x}
+
+export SCRIPT=`basename $0 | sed -e 's/\./\\\./'`
+export SCRIPTDIR=`echo $0 | sed -e "s/$SCRIPT//"`/..
+. $SCRIPTDIR/shellpacks/common.sh
+. $SCRIPTDIR/shellpacks/common-config.sh
+. $SHELLPACK_INCLUDE/include-sizes.sh
+export PATH=$SCRIPTDIR/bin:$PATH
+#ARCH=`uname -m`
+
+update_ncpus() {
+	local C=$1
+	if [ $C -eq 1 ]; then
+		echo 2
+	elif [ $C -lt 16 ]; then
+		echo $((C + 2))
+	else
+		echo $((C + 16))
+	fi
+}
+
+update_mem() {
+	local M=$1
+	if [ $M -eq 1024 ]; then
+		echo 2048
+	elif [ $M -lt 32768 ]; then
+		echo $((M + 2048))
+	else
+		echo $((M + 32768))
+	fi
+}
+
+localdefaults() {
+	get_numa_details
+
+	if ! command -v virsh &> /dev/null ; then
+		echo "ERROR: it seems virsh is missing. Cannot continue"
+		exit 255
+	fi
+
+	if ! command -v ip &> /dev/null ; then
+		echo "ERROR: it seems ip is missing. Cannot continue"
+		exit 255
+	fi
+
+	NET=$(virsh net-list | grep active | grep default | awk '{print $1;}')
+	[ -z $NET ] && NET=$(virsh net-list | grep active | head -1 | awk '{print $1;}')
+	if [ ! -z $NET ]; then
+		IF=$(virsh net-info $NET | grep ^Bridge | awk '{print $2;}')
+	else
+		# TODO: Make this smarter (like check for a few bridges, check their
+		#       link status, etc)
+		IF=virbr0
+	fi
+	BRIP=$(ip -f inet addr show $IF | awk '/inet / {print $2}' | cut -f1 -d'/')
+	if [ -z $BRIP ]; then
+		echo "ERROR: Cannot guess the bridge IP"
+		exit 255
+	fi
+
+	# TODO: Make this an (optional) parameter and/or do some kind of
+	#       smarter detection (like check more pool and take the largest, etc)
+	POOL=$(virsh pool-list | grep active | grep default | awk '{print $1;}')
+	[ -z $POOL ] && POOL=$(virsh pool-list | grep active | head -1 | awk '{print $1;}')
+	DISKMAX=$(virsh pool-info $POOL | grep ^Available | awk '{print $2;}' | cut -f1 -d'.' | cut -f1 -d',')
+	if [ -z $DISKMAX ]; then
+		echo "ERROR: Cannot guess the available storage"
+		exit 255
+	fi
+
+	MEMTOTAL_MBYTES=$((MEMTOTAL_BYTES/1048576))
+	MEMMAX=$((MEMTOTAL_MBYTES*9/10)) \
+	VMSMAX=$((NUMCPUS*4))
+
+	CPUSMAX=$((NUMCPUS*2))
+	VCPUSMAX=$NUMCPUS
+}
+
+usage() {
+	echo " Usage: $0 --mcpus C --mvcpus V --mmemmb M --mdisk D --mvms V \\"
+	echo "          [ --brip I] [--disksz S]"
+	echo " XXX"
+}
+
+CPUSMAX=$NUMCPUS
+VCPUSMAX=1
+MEMMAX=2048
+DISKSZ=8
+VMSMAX=1
+DISKMAX=$(($DISKSZ*$VMSMAX))
+BRIP="192.168.122.1"
+DISKPOOL="default"
+DISTRO="openSUSE-Tumbleweed"
+FSFX=
+FCFG_PRE="$(mktemp $HOME/tmpcfg-pre-XXXX)"
+FCFG_POST="$(mktemp $HOME/tmpcfg-post-XXXX)"
+while true; do
+	if [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
+		usage
+		popd &> /dev/null
+		exit 0
+	elif [ "$1" == "--localmachine" ]; then
+		localdefaults
+		shift
+	elif [ "$1" == "--mcpus" ]; then
+		CPUSMAX=$2
+		shift 2
+	elif [ "$1" == "--mvcpus" ]; then
+		VCPUSMAX=$2
+		shift 2
+	elif [ "$1" == "--mmemmb" ]; then
+		MEMMAX=$2
+		shift 2
+	elif [ "$1" == "--mdisk" ]; then
+		DISKMAX=$2
+		shift 2
+	elif [ "$1" == "--mvms" ]; then
+		VMSMAX=$2
+		shift 2
+	elif [ "$1" == "--brip" ]; then
+		BRIP=$2
+		shift 2
+	elif [ "$1" == "--disksz" ]; then
+		DISKSZ=$2
+		DISKSIZE="export MMTESTS_VMS_DISK_FILE_SIZE=$2"
+		shift 2
+	elif [ "$1" == "--diskpool" ]; then
+		DISKPOOL=$2
+		shift 2
+	elif [ "$1" == "--diskcopy" ] || [ "$1" == "--diskbacking" ]; then
+		DISKCOPY="export MMTESTS_VMS_COPY_DISK_FILE=\"$2\""
+		if [ "$1" == "--diskbacking" ]; then
+			DISKBACKING="export MMTESTS_VMS_COPY_DISK_COW=\"true\""
+		fi
+		shift 2
+		DISKSZ=0
+		DISKSIZE=""
+	elif [ "$1" == "--distro" ]; then
+		DISTRO="$2"
+		shift 2
+	elif [ "$1" == "--suffix" ]; then
+		FSFX="${FSFX}$2"
+		shift 2
+	elif [ "$1" == "--include" ]; then
+		[[ -f "$2" ]] && cat "$2" >> "$FCFG_PRE"
+		shift 2
+	elif [ "$1" == "--append" ]; then
+		[[ -f "$2" ]] && cat "$2" >> "$FCFG_POST"
+	else
+		break
+	fi
+done
+
+if [ -z $CPUSMAX ] || [ -z $VCPUSMAX ] || [ -z $MEMMAX ] || [ -z $VMSMAX ]; then
+	echo "ERROR: invalid invocation!"
+	usage
+	exit 255
+fi
+
+mkdir -p ${SCRIPTDIR}/host-configs || exit 255
+pushd $SCRIPTDIR/host-configs &> /dev/null
+
+VMS=1
+while [ $VMS -le $VMSMAX ]
+do
+	NCPUS=1
+	while [ $NCPUS -le $VCPUSMAX ]
+	do
+		if [ $(( $NCPUS * $VMS )) -gt $CPUSMAX ]; then
+			break
+		fi
+		MEMMB=2048
+		while [ $MEMMB -le $MEMMAX ]
+		do
+			if [[ $(( $DISKSZ * $VMS )) -gt $DISKMAX ]]; then
+				break
+			fi
+			if [ $(( $MEMMB * $VMS )) -gt $MEMMAX ]; then
+				break
+			fi
+			FILE="config-${VMS}vm-${NCPUS}vcpu-$((MEMMB/1024))ram${FSFX}"
+			cp "$FCFG_PRE" "$FILE"
+			cat << EOF >> "$FILE"
+
+export MMTESTS_HOST_IP="$BRIP"
+export AUTO_PACKAGE_INSTALL="yes"
+
+# Undefine and delete the VMs, if they already exist
+export MMTESTS_VMS_UNDEF_BEFORE_START="yes"
+export MMTESTS_VMS_UNDEF_REMOVE_STORAGE="yes"
+
+export MMTESTS_VMS_DISK_POOL=$DISKPOOL
+$DISKSIZE
+$DISKCOPY
+$DISKBACKING
+
+export MMTESTS_VMS_DEPLOY_DISTRO="$DISTRO"
+export MMTESTS_POST_VM_START_SCRIPTS=kvm-pkg-update,kvm-set-hostname
+
+EOF
+			echo -ne "export MMTESTS_VMS=\"" >> "$FILE"
+			for i in `seq 1 ${VMS}`
+			do
+				echo -ne "vm${i}" >> "$FILE"
+				if [ $i -ne $VMS ]; then echo -ne " " >> "$FILE"; fi
+			done
+			echo -e "\"\n" >> "$FILE"
+			echo "export MMTESTS_VMS_CPUS=$NCPUS" >> "$FILE"
+			echo "export MMTESTS_VMS_MEMORY=$MEMMB" >> "$FILE"
+
+			cat "$FCFG_POST" >> "$FILE"
+
+			MEMMB=$(update_mem $MEMMB)
+		done
+		NCPUS=$(update_ncpus $NCPUS)
+	done
+	VMS=$((VMS + 1))
+done
+
+popd &> /dev/null
+rm -f "$FCFG_PRE" "$FCFG_POST"
+exit 0
