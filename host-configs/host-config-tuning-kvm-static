@@ -1,0 +1,24 @@
+# We often want deterministic performance
+cpupower frequency-set -g performance
+
+# No THP when doing static tuning (HPs have better been preallocated!)
+echo never > /sys/kernel/mm/transparent_hugepage/enabled
+
+# Ideally, we would make sure that 1GB hugepages will be used, and that enough
+# of them have been pre-allocated, but it's tricky to do it here, as we don't
+# know yet how much would be enough.
+
+# Static tuning also means resource partitioning, so no dynamic balancing
+echo 0 > /proc/sys/kernel/numa_balancing
+
+# No dynamic balancing. Route the IRQs manually, if important
+systemctl stop irqbalance.service
+
+# Let's also flush and disable KSM
+/bin/echo 2 > /sys/kernel/mm/ksm/run
+/bin/echo 0 > /sys/kernel/mm/ksm/run
+
+# We may or may not want tuned and. If yes, we need to choose a profile
+#export MMTESTS_TUNED_PROFILE="latency-performance"
+#export MMTESTS_TUNED_PROFILE="throughput-performance"
+#export MMTESTS_TUNED_PROFILE="virtual-host"
