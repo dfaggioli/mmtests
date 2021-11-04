@@ -1,0 +1,137 @@
+#!/bin/bash
+#set ${MMTESTS_SH_DEBUG:-+x}
+
+export SCRIPT=`basename $0 | sed -e 's/\./\\\./'`
+export SCRIPTDIR=`echo $0 | sed -e "s/$SCRIPT//"`
+mkdir -p ${SCRIPTDIR}/../host-configs || exit 255
+pushd $SCRIPTDIR/../host-configs &> /dev/null
+
+update_ncpus() {
+	local C=$1
+	if [ $C -eq 1 ]; then
+		echo 2
+	elif [ $C -lt 16 ]; then
+		echo $((C + 2))
+	else
+		echo $((C * 2))
+	fi
+}
+
+update_mem() {
+	local M=$1
+	if [ $M -eq 1024 ]; then
+		echo 2048
+	elif [ $M -lt 32768 ]; then
+		echo $((M + 2048))
+	else
+		echo $((M * 2))
+	fi
+}
+
+usage() {
+	echo " Usage: $0 --mcpus C --mvcpus V --mmemmb M --mdisk D --mvms V \\"
+	echo "          [ --brip I] [--disksz S]"
+}
+
+while true; do
+	if [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
+		usage
+		popd &> /dev/null
+		exit 0
+	elif [ "$1" == "--mcpus" ]; then
+		CPUSMAX=$2
+		shift 2
+	elif [ "$1" == "--mvcpus" ]; then
+		NUMCPUS=$2
+		shift 2
+	elif [ "$1" == "--mmemmb" ]; then
+		MEMMAX=$2
+		shift 2
+	elif [ "$1" == "--mdisk" ]; then
+		DISKMAX=$2
+		shift 2
+	elif [ "$1" == "--mvms" ]; then
+		VMSMAX=$2
+		shift 2
+	elif [ "$1" == "--brip" ]; then
+		BRIP=$2
+		shift 2
+	elif [ "$1" == "--disksz" ]; then
+		DISKSZ=$2
+		shift 2
+	elif [ "$1" == "--diskpool" ]; then
+		DISKPOOL=$2
+		shift 2
+	else
+		break
+	fi
+done
+
+if [ -z $CPUSMAX ] || [ -z $NUMCPUS ] || [ -z $MEMMAX ] || [ -z $DISKMAX ] || [ -z $VMSMAX ]; then
+	echo "ERROR: invalid invocation!"
+	usage
+	exit 255
+	popd &> /dev/null
+fi
+
+[ -z $BRIP ] && BRIP="192.168.122.1"
+[ -z $DISKPOOL ] && DISKPOOL="default"
+[ -z $DISKSZ ] && DISKSZ=8
+
+VMS=1
+while [ $VMS -le $VMSMAX ]
+do
+	NCPUS=1
+	while [ $NCPUS -le $NUMCPUS ]
+	do
+		if [ $(( $NCPUS * $VMS )) -gt $CPUSMAX ]; then
+			NCPUS=$(update_ncpus $NCPUS)
+			continue
+		fi
+		MEMMB=2048
+		while [ $MEMMB -le $MEMMAX ] && [ $(( $DISKSZ * $VMS )) -le $DISKMAX ]
+		do
+			if [ $(( $MEMMB * $VMS )) -gt $MEMMAX ]; then
+				MEMMB=$(update_mem $MEMMB)
+				continue
+			fi
+			FILE="config-${VMS}vm-${NCPUS}vcpu-$((MEMMB/1024))ram"
+			cat << EOF > "$FILE"
+export MMTESTS_HOST_IP="$BRIP"
+export AUTO_PACKAGE_INSTALL="yes"
+
+# Undefine and delete the VMs, if they already exist
+export MMTESTS_VMS_UNDEF_BEFORE_START="yes"
+export MMTESTS_VMS_UNDEF_REMOVE_STORAGE="yes"
+
+# List of monitors for the host
+export RUN_MONITOR=yes
+export MONITORS_ALWAYS="top"
+export MONITORS_GZIP="proc-vmstat mpstat"
+export MONITORS_WITH_LATENCY="vmstat"
+export MONITORS_TRACER="perf-event-stat"
+export MONITOR_PERF_EVENTS=cpu-migrations,context-switches
+export MONITOR_UPDATE_FREQUENCY=10
+
+export MMTESTS_VMS_DISK_POOL=$DISKPOOL
+export MMTESTS_VMS_DISK_FILE_SIZE=$DISKSZ
+
+EOF
+			echo -ne "export MMTESTS_VMS=\"" >> "$FILE"
+			for i in `seq 1 ${VMS}`
+			do
+				echo -ne "vm${i}" >> "$FILE"
+				if [ $i -ne $VMS ]; then echo -ne " " >> "$FILE"; fi
+			done
+			echo -e "\"\n" >> "$FILE"
+			echo "export MMTESTS_VMS_CPUS=$NCPUS" >> "$FILE"
+			echo "export MMTESTS_VMS_MEMORY=$MEMMB" >> "$FILE"
+			MEMMB=$(update_mem $MEMMB)
+		done
+		NCPUS=$(update_ncpus $NCPUS)
+	done
+	VMS=$((VMS + 1))
+done
+
+popd &> /dev/null
+exit 0
