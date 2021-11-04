@@ -1,0 +1,56 @@
+#!/bin/bash
+#set ${MMTESTS_SH_DEBUG:-+x}
+
+export SCRIPT=`basename $0 | sed -e 's/\./\\\./'`
+export SCRIPTDIR=`echo $0 | sed -e "s/$SCRIPT//"`/..
+. $SCRIPTDIR/shellpacks/common.sh
+. $SCRIPTDIR/shellpacks/common-config.sh
+. $SHELLPACK_INCLUDE/include-sizes.sh
+export PATH=$SCRIPTDIR/bin:$PATH
+#ARCH=`uname -m`
+get_numa_details
+
+if ! command -v virsh &> /dev/null ; then
+	echo "ERROR: it seems virsh is missing. Cannot continue"
+	exit 255
+fi
+if ! command -v ip &> /dev/null ; then
+	echo "ERROR: it seems ip is missing. Cannot continue"
+	exit 255
+fi
+
+NET=$(virsh net-list | grep active | grep default | awk '{print $1;}')
+[ -z $NET ] && NET=$(virsh net-list | grep active | head -1 | awk '{print $1;}')
+if [ ! -z $NET ]; then
+	IF=$(virsh net-info $NET | grep ^Bridge | awk '{print $2;}')
+else
+	# TODO: Make this smarter (like check for a few bridges, check their
+	#       link status, etc)
+	IF=virbr0
+fi
+BRIP=$(ip -f inet addr show $IF | awk '/inet / {print $2}' | cut -f1 -d'/')
+if [ -z $BRIP ]; then
+	echo "ERROR: Cannot guess the bridge IP"
+	exit 255
+fi
+
+# TODO: Make this an (optional) parameter and/or do some kind of
+#       smarter detection (like check more pool and take the largest, etc)
+POOL=$(virsh net-list | grep active | grep default | awk '{print $1;}')
+[ -z $POOL ] && POOL=$(virsh net-list | grep active | head -1 | awk '{print $1;}')
+MAXDISK=$(virsh pool-info $POOL | grep ^Available | awk '{print $2;}' | cut -f1 -d'.')
+if [ -z $MAXDISK ]; then
+	echo "ERROR: Cannot guess the available storage"
+	exit 255
+fi
+
+MEMTOTAL_MBYTES=$((MEMTOTAL_BYTES/1048576))
+generate-generic-host-configs --mcpus $((NUMCPUS*2)) \
+	--mvcpus $NUMCPUS \
+	--mmemmb $((MEMTOTAL_MBYTES*9/10)) \
+	--diskpool $POOL \
+	--mdisk $MAXDISK \
+	--mvms $((NUMCPUS*4)) \
+	--brip $BRIP
+
+exit 0
