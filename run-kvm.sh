@@ -176,8 +176,10 @@ if [ ! -z $MMTESTS_HOST_IP ]; then
 	if ! command -v parallel &> /dev/null ; then
 		echo "WARNING: No package for GNU parallel found. We can work without it, but it would be better to have it."
 		echo "If you are on [open]SUSE, you can try this (but no guarantees it's still there!):"
-		echo "  zypper ar https://download.opensuse.org/repositories/home:/tange/openSUSE_Tumbleweed/home:tange.repo"
-		echo "  zypper ref && zypper in parallel"
+		echo " zypper ar https://download.opensuse.org/repositories/utilities/openSUSE_Factory/utilities.repo && zypper ref && zypper in gnu_parallel"
+		echo "Or:"
+		echo " zypper ar https://download.opensuse.org/repositories/utilities/15.4/utilities.repo && zypper ref && zypper in gnu_parallel"
+
 	fi
 
 	for c in ${MMTESTS_CONFIGS[@]}; do
