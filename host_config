@@ -15,7 +15,7 @@ export AUTO_PACKAGE_INSTALL="yes"
 # the test (namely, `-H`). And where the output is saved (if desired) can be
 # controlled with MMTESTS_PSSH_OUTDIR (see below). This should contain other
 # options, if they are desired, such as, for instance, `-v`).
-#export MMTESTS_PSSH_OPTIONS="-v"
+#export MMTESTS_PSSH_CONFIG_OPTIONS="-v"
 
 # Let's have run-mmtests.sh output from the VMs in /tmp
 #export MMTESTS_PSSH_OUTDIR=/tmp

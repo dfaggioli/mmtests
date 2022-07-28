@@ -10,12 +10,8 @@ export EXPECT_UNBUFFER=$SCRIPTDIR/bin/unbuffer
 . $SCRIPTDIR/shellpacks/common-config.sh
 . $SCRIPTDIR/shellpacks/monitors.sh
 
-MMTESTS_SSH_CONFIG_OPTIONS+="-o StrictHostKeyChecking=no -o ForwardAgent=no -o ForwardX11=no"
-MMTESTS_SSH_OPTIONS+=" $SSH_CONFIG_OPTIONS"
-MMTESTS_PSSH_OPTIONS+=" -t 0 $(echo $MMTESTS_SSH_CONFIG_OPTIONS|sed s/-o/-O/g)"
-#for i in $MMTESTS_SSH_OPTIONS ; do
-#	MMTESTS_PSSH_OPTIONS+=" -x $i"
-#done
+MMTESTS_SSH_OPTIONS="$MMTESTS_SSH_CONFIG_OPTIONS -o StrictHostKeyChecking=no -o ForwardAgent=no -o ForwardX11=no"
+MMTESTS_PSSH_OPTIONS="$MMTESTS_PSSH_CONFIG_OPTIONS -t 0 $(echo $MMTESTS_SSH_OPTIONS|sed s/-o/-O/g)"
 
 if [ "$MARVIN_KVM_DOMAIN" = "" ]; then
 	export MARVIN_KVM_DOMAIN="marvin-mmtests"
@@ -386,7 +382,7 @@ else
 	command -v $PSSH &> /dev/null || \
 		die "pscp is there, but not pssh? Too weird to continue!"
 
-	PSSH_OPTS="$PSSH_OPTS $PSSH_HOSTS $MMTESTS_PSSH_OPTIONS -p $(( $VMCOUNT * 2 ))"
+	PSSH_OPTS="$PSSH_HOSTS $MMTESTS_PSSH_OPTIONS -p $(( $VMCOUNT * 2 ))"
 	SSH_TARGET=""   # All we need is already in PSSH_OPTS!
 	SCP_TARGET="~"  # We need just the path(s)"
 fi
@@ -694,8 +690,8 @@ v=1
 for VM in $(tr ',' '\n' <<< "$VMS")
 do
 	# TODO: these two can probably be replaced with `pssh` and `pslurp`...
-	ssh root@${GUEST_IP[$v]} "cd git-private/$NAME && tar -czf work-${VM_RUNNAME[$v]}.tar.gz $SHELLPACK_LOG_BASE_SUBDIR" || die Failed to archive $SHELLPACK_LOG_BASE_SUBDIR
-	scp root@${GUEST_IP[$v]}:git-private/$NAME/work-${VM_RUNNAME[$v]}.tar.gz . || die Failed to download work.tar.gz
+	ssh $MMTESTS_SSH_OPTIONS root@${GUEST_IP[$v]} "cd git-private/$NAME && tar -czf work-${VM_RUNNAME[$v]}.tar.gz $SHELLPACK_LOG_BASE_SUBDIR" || die Failed to archive $SHELLPACK_LOG_BASE_SUBDIR
+	scp $MMTESTS_SSH_OPTIONS root@${GUEST_IP[$v]}:git-private/$NAME/work-${VM_RUNNAME[$v]}.tar.gz . || die Failed to download work.tar.gz
 	# Do not change behavior, file names, etc, if no VM list is specified.
 	# That, in fact, is how currently Marvin works, and we don't want to
 	# break it.
