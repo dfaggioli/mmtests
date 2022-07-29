@@ -21,7 +21,7 @@ fi
 for VM in $(tr ',' '\n' <<< "$VMS")
 do
 	# Does virsh think it's running?
-	if ! `kvm-check-running "$VM"` ; then
+	if ! kvm-check-running "$VM" ; then
 		echo "Not stopping $VM as it is not running..."
 		continue
 	fi
@@ -32,13 +32,13 @@ done
 for VM in $(tr ',' '\n' <<< "$VMS")
 do
 	# Even if it was running before, it may be shutdown by now...
-	if ! `kvm-check-running "$VM"` ; then
+	if ! kvm-check-running "$VM" ; then
 		continue
 	fi
 
 	echo -n "Waiting on $VM shutdown to complete"
 	DURATION=0
-	while `kvm-check-running "$VM"`
+	while kvm-check-running "$VM"
 	do
 		echo -n .
 		sleep 5

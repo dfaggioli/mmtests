@@ -21,7 +21,7 @@ fi
 TIMEOUT=600
 for VM in $(tr ',' '\n' <<< "$VMS")
 do
-	if `kvm-check-running "$VM"` ; then
+	if kvm-check-running "$VM" ; then
 		echo $VM already running according to virsh
 		GUEST_IP=`kvm-ip-address --vm $VM 0`
 		if [ $? -eq 0 ]; then
@@ -33,7 +33,7 @@ do
 	echo Starting $VM
 	virsh start $VM
 	STARTTIME=`date +%s`
-	while ! `kvm-check-running "$VM"` ; do
+	while ! kvm-check-running "$VM" ; do
 		CURRENTTIME=`date +%s`
 		RUNNING=$((CURRENTTIME-STARTTIME))
 		if [ $RUNNING -gt $TIMEOUT ]; then
