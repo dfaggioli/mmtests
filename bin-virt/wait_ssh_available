@@ -20,7 +20,7 @@ RESET=$2
 
 EXPECT_SCRIPT=`mktemp`
 cat > $EXPECT_SCRIPT <<EOF
-spawn ssh -o PubkeyAuthentication=no root@$MACHINE echo marvin-ping
+spawn ssh -o PubkeyAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$MACHINE echo marvin-ping
 expect {
 	marvin-ping		{ exit   1 }
 	"assword"		{ exit   1 }

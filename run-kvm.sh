@@ -14,7 +14,7 @@ export EXPECT_UNBUFFER=$SCRIPTDIR/bin/unbuffer
 if [ -z $MMTESTS_VMS_SSHKEY ]; then
 	export MMTESTS_VMS_SSHKEY=${SCRIPTDIR}/mmtests_vms_sshkey
 fi
-MMTESTS_SSH_OPTIONS="$MMTESTS_SSH_CONFIG_OPTIONS -o StrictHostKeyChecking=no -o ForwardAgent=no -o ForwardX11=no -o IdentitiesOnly=yes -o IdentityFile=${MMTESTS_VMS_SSHKEY}"
+export MMTESTS_SSH_OPTIONS="$MMTESTS_SSH_CONFIG_OPTIONS -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ForwardAgent=no -o ForwardX11=no -o IdentitiesOnly=yes -o IdentityFile=${MMTESTS_VMS_SSHKEY}"
 MMTESTS_PSSH_OPTIONS="$MMTESTS_PSSH_CONFIG_OPTIONS -t 0 $(echo $MMTESTS_SSH_OPTIONS|sed s/-o/-O/g)"
 
 if [ "$MARVIN_KVM_DOMAIN" = "" ]; then
