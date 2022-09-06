@@ -1,0 +1,31 @@
+#!/bin/bash -x
+#
+# XXX
+
+# This script is meant to be called as an "hook", from run-kvm.sh.
+# That means we get one parameter: the (coma separated) list of all VMs
+# we're trying to run the benchmark in.
+VMS=$1
+
+#[[ $MMTESTS_SSH_OPTIONS ]] || MMTESTS_SSH_OPTIONS="$MMTESTS_SSH_CONFIG_OPTIONS -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ForwardAgent=no -o ForwardX11=no -o IdentitiesOnly=yes -o IdentityFile=${MMTESTS_VMS_SSHKEY}"
+
+# Of course, the VMs must be running
+for VM in $(tr ',' '\n' <<< "$VMS")
+do
+	IP="$(kvm-ip-address --vm $VM)"
+	wait_ssh_available $IP
+	VM_OS_RELEASE=$(mktemp /tmp/${VM}-os-release-XXX.txt)
+	scp $MMTESTS_SSH_OPTIONS root@${IP}:/etc/os-release "$VM_OS_RELEASE"
+	if grep ID_LIKE "$VM_OS_RELEASE" | grep -q suse ; then
+		UPDATE_CMD="ssh $MMTESTS_SSH_OPTIONS root@${IP} zypper --non-interactive --gpg-auto-import-keys"
+		$UPDATE_CMD ref
+		if grep ID "$VM_OS_RELEASE" | grep -q tumbleweed ; then
+			$UPDATE_CMD dup --auto-agree-with-licenses --force-resolution --allow-downgrade --allow-verndor-change
+		else
+			$UPDATE_CMD up --auto-agree-with-licenses --force-resolution
+		fi
+	fi
+	rm -f "$VM_OS_RELEASE"
+	ssh $MMTESTS_SSH_OPTIONS root@${IP} reboot
+done
+exit 0

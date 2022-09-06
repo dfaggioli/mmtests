@@ -91,6 +91,9 @@ export MONITOR_UPDATE_FREQUENCY=10
 #   are found in the two arrays)
 #export MMTESTS_VMS_IP="192.168.122.24 192.168.122.38"
 
+# XXX
+#export MMTESTS_POST_VM_START_SCRIPTS=kvm-pkg-update
+
 # The location of config files for guests (e.g., libvirt xml
 # config files for VMs) that are not defined already when
 # starting the benchmark and that MMTests have then to create,
