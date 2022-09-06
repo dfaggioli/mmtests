@@ -22,16 +22,17 @@ VM=$MARVIN_KVM_DOMAIN
 
 GUEST_IP=
 TIMEOUT=$1
+[[ "$TIMEOUT" == "0" ]] && TIMEOUT=""
 STARTTIME=`date +%s`
 
 lookup_state() {
-	local _ip=$1
-	local _state="REACHABLE"
+	local IP=$1
+	local STATE="REACHABLE"
 
-	if [ "`which ip 2> /dev/null`" != "" ]; then
-		_state=`ip n show | grep ^$_ip | awk '{print $NF}'`
+	if command -v ip &> /dev/null ; then
+		STATE=$(ip neighbour show | grep "^${IP}\b" | awk '{print $NF}')
 	fi
-	echo $_state
+	echo $STATE
 }
 
 while [ "$GUEST_IP" = "" ]; do
@@ -70,9 +71,8 @@ while [ "$GUEST_IP" = "" ]; do
 		done
 	done
 
-	if [ "$GUEST_IP" = "" ]; then
-		sleep 10
-	fi
+	GUEST_IP=""
+	sleep 10
 done
 
 exit -1
