@@ -87,6 +87,9 @@ export MONITOR_UPDATE_FREQUENCY=10
 # (if not specified via command line)
 #export MMTESTS_VMS="vm1 vm2"
 
+# XXX
+#export MMTESTS_POST_VM_START_SCRIPTS=kvm-pkg-update
+
 # The location of config files for guests (e.g., libvirt xml
 # config files for VMs) that are not defined already when
 # starting the benchmark and that MMTests have then to create,
