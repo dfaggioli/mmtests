@@ -88,7 +88,9 @@ export MONITOR_UPDATE_FREQUENCY=10
 #export MMTESTS_VMS="vm1 vm2"
 
 # XXX
-#export MMTESTS_POST_VM_START_SCRIPTS=kvm-pkg-update
+# - kvm-set-hostname: set the hostname of each VM to their name
+#   (as defined in this file, e.g., vm1, vm2, ecc)
+#export MMTESTS_POST_VM_START_SCRIPTS=kvm-pkg-update,kvm-set-hostname
 
 # The location of config files for guests (e.g., libvirt xml
 # config files for VMs) that are not defined already when
