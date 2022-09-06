@@ -582,6 +582,7 @@ for (( MMTEST_ITERATION = 0; MMTEST_ITERATION < $MMTEST_ITERATIONS; MMTEST_ITERA
 	sysstate_log_basic_info
 	collect_hardware_info
 	collect_kernel_info
+	collect_os_info
 	collect_sysconfig_info
 
 	for TEST in $MMTESTS; do
