@@ -35,11 +35,11 @@ do
 
 	if kvm-check-running "$VM" ; then
 		echo $VM already running according to virsh
-		GUEST_IP=`kvm-ip-address --vm $VM 0`
-		if [ $? -eq 0 ]; then
-			[ -z $SKIP_SSH_CHECK ] && wait_ssh_available $GUEST_IP
-			continue
-		fi
+#		GUEST_IP=`kvm-ip-address --vm $VM 30`
+#		if [ $? -eq 0 ]; then
+#			[ -z $SKIP_SSH_CHECK ] && wait_ssh_available $GUEST_IP
+		continue
+#		fi
 	fi
 
 	RESTORE_PID=
