@@ -1549,6 +1549,14 @@ function collect_hardware_info()
 	systemctl list-units &> $SHELLPACK_LOG/systemctl-units.txt
 }
 
+function collect_os_info()
+{
+	if command -v rpm &> /dev/null ; then
+		rpm -qa | sort > $SHELLPACK_LOG/rpm-packages.txt
+		gzip $SHELLPACK_LOG/rpm-packages.txt
+	fi
+}
+
 function collect_kernel_info()
 {
 	[ -z $SHELLPACK_LOG ] && return
