@@ -274,7 +274,7 @@ foreach my $package (@ARGV) {
 	}
 
 	if ($ENV{"AUTO_PACKAGE_INSTALL"} eq "yes" || -e $ENV{"HOME"} . "/.mmtests-auto-package-install") {
-		$force_install{"suse"} = "-y";
+		$package_bin{"suse"} = "zypper --non-interactive install";
 		$force_install{"debian"} = "-y";
 		$force_install{"redhat"} = "-y";
 	}
