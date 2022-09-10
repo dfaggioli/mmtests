@@ -1,5 +1,7 @@
 #!/bin/bash
 
+install-depends perf
+
 if [ "$MONITOR_PERF_EVENTS" = "" ]; then
 	echo ERROR: Did not specify MONITOR_PERF_EVENTS in log
 	exit -1
