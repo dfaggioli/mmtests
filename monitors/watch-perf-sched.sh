@@ -1,5 +1,7 @@
 #!/bin/bash
 
+install-depends perf
+
 if [ -e /proc/sys/kernel/sched_schedstats ]; then
 	echo 1 > /proc/sys/kernel/sched_schedstats
 fi
