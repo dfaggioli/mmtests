@@ -95,6 +95,7 @@ export MONITOR_UPDATE_FREQUENCY=10
 
 # XXX
 #export MMTESTS_VMS_COPY_DISK_FILE=/vmimages/vms.disk
+#export MMTESTS_VMS_COPY_DISK_COW="false"
 
 # XXX Guests configurations
 #
