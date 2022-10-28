@@ -414,6 +414,10 @@ $PSCP $PSSH_OPTS ${NAME}.tar.gz $SCP_TARGET || die Failed to upload ${NAME}.tar.
 # all the targets are in PSSH_OPTS already) or "root@GUEST_IP", if we have
 # only one VM.
 $PSSH $PSSH_OPTS $SSH_TARGET "mkdir -p git-private && rm -rf git-private/${NAME} && tar -C git-private -xf ${NAME}.tar.gz" || die Failed to extract ${NAME}.tar.gz
+$PSSH $PSSH_OPTS $SSH_TARGET "cd git-private/${NAME} && ./bin/autogen-configs" || die Failed to generate MMTests config files
+if [ "$MMTESTS_UPDATE_BUILD_FLAGS" = "yes" ]; then
+	$PSSH $PSSH_OPTS $SSH_TARGET "cd git-private/${NAME} && ./bin/update-build-flags.sh" || die Failed to generate MMTests config files
+fi
 rm ${NAME}.tar.gz
 
 # We'll be running benchmarks with [P]SSH, without a terminal, etc. We *must*
