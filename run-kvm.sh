@@ -370,6 +370,9 @@ else
 		exit 1
 	fi
 
+	echo "Tuning the VM(s) configurations:"
+	kvm-tune --vm $VMS || die "Failed to apply tuning"
+
 	echo "Booting the VM(s)"
 	activity_log "run-kvm: Booting VMs"
 	kvm-start --vm $VMS || die "Failed to boot VM(s)"

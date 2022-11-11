@@ -1,0 +1,144 @@
+#!/bin/bash -x
+#
+# XXX
+DIRNAME=`dirname $0`
+SCRIPTDIR=`cd "$DIRNAME/.." && pwd`
+
+if [ "$MARVIN_KVM_DOMAIN" = "" ]; then
+	export MARVIN_KVM_DOMAIN="marvin-mmtests"
+fi
+
+if [ "$1" = "--vm" ]; then
+	VMS="$2"
+	shift 2
+else
+	VMS=$MARVIN_KVM_DOMAIN
+fi
+
+#if [ "$MARVIN_KVM_DOMAIN" = "" ]; then
+#	# FIXME: '-' in variable names does not work.
+#	# We need to find a way for dealing with this!
+#	# export MARVIN_KVM_DOMAIN="marvin-mmtests"
+#	export MARVIN_KVM_DOMAIN="marvin_mmtests"
+#fi
+#VMS="$MARVIN_KVM_DOMAIN"
+#
+#while [[ "$1" != "" ]]
+#do
+#	case "$1" in
+#	--vm)
+#		VMS="$2"
+#		shift 2
+#		;;
+#	*)
+#		echo "Unrecognised option $1"
+#		exit
+#		;;
+#	esac
+#done
+
+THREADS_PER_CORE=$(lscpu | grep Thread | cut -f2 -d':')
+CORES_PER_SOCKET=$(lscpu | grep Core.*socket | cut -f2 -d':')
+SOCKETS=$(lscpu | grep Socket | cut -f2 -d':')
+
+NVMS=$(echo "$VMS" | wc -w)
+
+# XXX: Hard-coded for now!
+TUNE_TOPOLOGY_1TO1=true
+TUNE_MEMORY_NOSHARING=true
+TUNE_MEMORY_LOCKED=true
+TUNE_MEMORY_1GHUGEPAGES=true
+TUNE_CPU_PINNING=true
+
+CURRENT_NODE=0 ; CURRENT_DIE=0 ; CURRENT_CORE=0
+for VM in $(tr ',' '\n' <<< "$VMS")
+do
+	VCPUS=$(virsh vcpucount $VM | grep ^current | awk '{print $3;}')
+	VMEM=$(virsh dominfo $VM | grep Max.*memory | cut -f2 -d':' | awk '{print $1}')
+	VMEMUNIT=$(virsh dominfo $VM | grep Max.*memory | cut -f2 -d':' | awk '{print $2}')
+
+	if [[ $TUNE_TOPOLOGY_1TO1 ]]; then
+
+		if lscpu | grep -E 'EPYC.*[[:digit:]]{3}4' -q ; then
+			# We're on EPYC4, so no host-passthrough for now.
+			# Let's go foor host-model
+			virt-xml $VM --edit --cpu model=host-model
+			# TODO: set the host address bits too
+		else
+			virt-xml $VM --edit --cpu model=host-passthrough
+			# TODO: set some kvm-hints too
+		fi
+
+
+		if [[ $(virsh capabilities| xmlstarlet sel -t -m '//cpu//model' -v . -n) == "EPYC-Milan" ]] ; then
+			echo bla
+		fi
+
+		# We want the same number of threads per core as the host:
+		VTHREADS=$THREADS_PER_CORE
+		# Therefore, we have this number of virtual threads, in total:
+		VCORES=$(($VCPUS / $VTHREADS))
+		# Let's compute how many virtual socket we need:
+		VSOCKETS=1
+		while [[ $(($VCORES / $VSOCKETS)) -gt $CORES_PER_SOCKET ]]; do
+			VSOCKETS=$(($VSOCKETS + 1))
+		done
+		VCORES_PER_VSOCKET=$(($VCORES / $VSOCKETS))
+		VCPUS_PER_VSOCKET=$(($VCORES_PER_VSOCKET * $VTHREADS))
+		if lscpu | grep -E 'EPYC.*[[:digit:]]{3}4' -q ; then
+			# If we're on EPYC4, since we can't yet use host-passthrough
+			# as the cpu-model, we better manually define the dies
+			CORES_PER_CCX=8 ; VCORES=$CORES_PER_CCX
+			DIES=",dies=$(($VCORES_PER_VSOCKET / $CORES_PER_CCX))"
+		fi
+		virt-xml $VM --edit --vcpus "sockets=${VSOCKETS}${DIES},cores=${VCORES},threads=${VTHREADS}"
+
+		VMEM_PER_VNODE=$(($VMEM / $VSOCKETS))
+		NUMA=""
+		for S in $(seq 1 $VSOCKETS) ; do
+			C=$((($S-1) * $VCPUS_PER_VSOCKET))
+			CC=$(($S * $VCPUS_PER_VSOCKET - 1))
+			NUMA=$NUMA,numa.cell$(($S-1)).id="$(($S-1))",numa.cell$(($S-1)).memory="${VMEM_PER_VNODE}",numa.cell$(($S-1)).unit="${VMEMUNIT}",numa.cell$(($S-1)).cpus="${C}-${CC},"
+		done
+		virt-xml $VM --edit --cpu $NUMA
+		for S in $(seq 1 $VSOCKETS) ; do
+		done
+
+		#virt-xml vm1 --edit --cputune vcpupin0.vcpu=0,vcpupin0.cpuset=0
+	fi
+
+	if [[ $TUNE_MEMORY_1GHUGEPAGES ]] || [[ $TUNE_MEMORY_2MHUGEPAGES ]]; then
+		if [[ $TUNE_MEMORY_1GHUGEPAGES ]] ; then
+			[[ "$VMEMUNIT" == "KiB" ]] && VMEM_HUGEPAGES=$(($VMEM/1024/1024))
+			HUGEPAGES_FREE=$(cat /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages)
+			virt-xml $VM --edit --memorybacking hugepages.page.size=1
+			virt-xml $VM --edit --memorybacking hugepages.page.unit="G"
+			TUNE_MEMORY_LOCKED=false
+		elif [[ $TUNE_MEMORY_2MHUGEPAGES ]]; then
+			[[ "$VMEMUNIT" == "KiB" ]] && VMEM_HUGEPAGES=$(($VMEM/2048))
+			HUGEPAGES_FREE=$(cat /sys/kernel/mm/hugepages/hugepages-2048kB/free_hugepages)
+			virt-xml $VM --edit --memorybacking hugepages.page.size=2
+			virt-xml $VM --edit --memorybacking hugepages.page.unit="M"
+		fi
+		if [[ $HUGEPAGES_FREE -lt $VMEM_HUGEPAGES ]]; then
+			echo "ERROR: Not enough hugepages for tuning $VM!"
+			exit -1
+		fi
+	fi
+	# TODO: Check that there are enough huge pages!
+	$TUNE_MEMORY_NOSHARING && virt-xml $VM --edit --memorybacking nosharedpages=yes
+	$TUNE_MEMORY_LOCKED && virt-xml $VM --edit --memorybacking locked=yes
+
+	if [[ $TUNE_CPU_PINNING ]]; then
+		if [[ $VSOCKETS -gt 1 ]]; then
+			for S in $(seq 1 $VSOCKETS) ; do
+				# We want to pin node S-1 to CURRENT_NODE
+				# Memory (XXX: For now, we assume that each virtual node is pinned to one physical node)
+				echo virt-xml $VM --edit --numatune memnode.cellid="$(($S-1))" memnode.mode="strict" memnode.nodeset="$CURRENT_NODE"
+				SELFDIST=$(numactl --hardware|grep "  $(($S-1)):" | cut -f2 -d':' | awk -v S=$S '{print $S}')
+				virt-xml $VM --edit --cpu numa.cell$(($S-1)).distances.sibling$(($S-1)).id="$(($S-1))",numa.cell$(($S-1)).distances.sibling$(($S-1)).value="$SELFDIST"
+			done
+		fi
+	fi
+done
+exit 0
