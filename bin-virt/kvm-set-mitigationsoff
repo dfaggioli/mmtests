@@ -1,0 +1,29 @@
+#!/bin/bash -x
+#
+# XXX
+
+# This script is meant to be called as an "hook", from run-kvm.sh.
+# That means we get one parameter: the (coma separated) list of all VMs
+# we're trying to run the benchmark in.
+VMS=$1
+
+#[[ $MMTESTS_SSH_OPTIONS ]] || MMTESTS_SSH_OPTIONS="$MMTESTS_SSH_CONFIG_OPTIONS -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ForwardAgent=no -o ForwardX11=no -o IdentitiesOnly=yes -o IdentityFile=${MMTESTS_VMS_SSHKEY}"
+
+# Of course, the VMs must be running
+for VM in $(tr ',' '\n' <<< "$VMS")
+do
+	IP="$(kvm-ip-address --vm $VM)"
+	wait_ssh_available $IP
+
+	if ! ssh $MMTESTS_SSH_OPTIONS root@${IP} "grep -q 'mitigations' /proc/cmdline" ; then
+		ssh $MMTESTS_SSH_OPTIONS root@${IP} "sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT=.*\)\(\"\)/\1 mitigations=off\2/' /etc/default/grub"
+	elif ! ssh $MMTESTS_SSH_OPTIONS root@${IP} "grep -q 'mitigations=off' /proc/cmdline" ; then
+		ssh $MMTESTS_SSH_OPTIONS root@${IP} "sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT=.*\)\(mitigations\)\(=[a-z]* \)\(.*\)/\1\2=off \4/' /etc/default/grub"
+	else
+		continue
+	fi
+	# TODO: Generalize this using grub2-mkconfig directly!
+	ssh $MMTESTS_SSH_OPTIONS root@${IP} update-bootloader
+	ssh $MMTESTS_SSH_OPTIONS root@${IP} reboot
+done
+exit 0
