@@ -112,11 +112,8 @@ do
 		fi
 	done
 
-	# If we're here, the VM wasn't defined. Well, It must be by now,
-	# or we have a problem!
 	if ! kvm-check-defined "$VM" ; then
-		echo "ERROR: $VM not defined, and no suitable config file found"
-		exit 1
+		echo "$VM not defined yet"
 	fi
 done
 exit 0

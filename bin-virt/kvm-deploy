@@ -1,0 +1,459 @@
+#!/bin/bash -x
+#
+# XXX
+#usage() {
+#	echo "Usage: $0 [--vm vmname] [--distro distroname] [--file-size size [--disk-pool poolname]] [--autoyast autoyast_filename]" >&2
+#}
+set ${MMTESTS_SH_DEBUG:-+x}
+
+DIRNAME=`dirname $0`
+SCRIPTDIR=`cd "$DIRNAME/.." && pwd`
+
+check_disk_pool() {
+	virsh pool-list --all | grep active | grep $1 &> /dev/null
+	return $?
+}
+
+# TODO: rather hackish check that this is an autoyast profile... Ideas welcome!
+check_autoyast () {
+	local AYASTF="$1"
+	# TODO: Maybe we should just always prefer .erb files, if they're there?
+	if [[ ! -f "$AYASTF" ]] && [[ -f "${AYASTF}.erb" ]]; then
+		AYASTF="${AYASTF}.erb"
+	fi
+	if [[ -f "$AYASTF" ]] &&
+	   [[ "$(file "$AYASTF")" =~ 'ASCII text'$ ]] &&
+	   head -1 $AYASTF | grep -q '^<profile.*http://www.suse.com/.*/configns' ; then
+		echo "$AYASTF"
+	else
+		echo ""
+	fi
+}
+
+# Format is distribution@install_location@autoyast. See host_config for more
+# info and examples.
+MMTESTS_DEPLOY_DISTRO_SPEC="
+openSUSE-Leap-15.4@https://download.opensuse.org/pub/opensuse/distribution/leap/15.4/repo/oss/@${MMTESTS_VMS_AUTOYAST:-${SCRIPTDIR}/autoyast/opensuse.xml.erb}
+openSUSE-Leap-15.3@https://download.opensuse.org/pub/opensuse/distribution/leap/15.3/repo/oss/@${MMTESTS_VMS_AUTOYAST:-${SCRIPTDIR}/autoyast/opensuse.xml.erb}
+openSUSE-Tumbleweed@https://download.opensuse.org/pub/opensuse/tumbleweed/repo/oss/@${MMTESTS_VMS_AUTOYAST:-${SCRIPTDIR}/autoyast/opensuse.xml.erb}
+$MMTESTS_DEPLOY_DISTRO_SPEC
+"
+
+if [ "$MARVIN_KVM_DOMAIN" = "" ]; then
+	# FIXME: '-' in variable names does not work.
+	# We need to find a way for dealing with this!
+	# export MARVIN_KVM_DOMAIN="marvin-mmtests"
+	export MARVIN_KVM_DOMAIN="marvin_mmtests"
+fi
+VMS="$MARVIN_KVM_DOMAIN"
+
+declare -a CFGDIRS
+while [[ "$1" != "" ]]
+do
+	case "$1" in
+	--vm)
+		VMS="$2"
+		shift 2
+		;;
+	--file-size)
+		FILE_SIZE="$2"
+		shift 2
+		;;
+	--disk-pool)
+		DISK_POOL="$2"
+		shift 2
+		;;
+	--disk-import)
+		IMPORT_DISK="$2"
+		shift 2
+		;;
+	--disk-copy)
+		COPY_DISK="$2"
+		shift 2
+		;;
+	--disk-copy-dest-path)
+		COPY_DISK_DEST="$2"
+		shift 2
+		;;
+	--distro)
+		DISTRO="$2"
+		shift 2
+		;;
+	--dir)
+		if [ -d "$2" ]; then
+			CFGDIRS+=( "$2" )
+		elif [ -d "./$2" ]; then
+			CFGDIRS+=( "./$2" )
+		fi
+		shift 2
+		;;
+	*)
+		echo "Unrecognised option $1"
+		exit
+		;;
+	esac
+done
+
+install-depends virt-install libxml2-tools
+
+MEMORY_SWITCH=--ram
+virt-install --help 2>&1 | grep -q -- --memory
+if [ $? -eq 0 ]; then
+	MEMORY_SWITCH=--memory
+fi
+
+GRAPHICS_SWITCH="--graphics none"
+virt-install --help 2>&1 | grep -q -- --nographics
+if [ $? -eq 0 ]; then
+	GRAPHICS_SWITCH="--nographics"
+fi
+
+# TODO: Make this configurable and customizable. For now,
+# let's just stick to plain virtio networking.
+NETWORK_SPEC="--network network=default,model=virtio"
+
+# TODO: Make this configurable and customizable. For now,
+# let's just stick to plain UEFI boot.
+BOOT_SWITCH="--boot uefi"
+
+# Preparing the log files and the screen sessions
+LOG_FILES_PATH="/tmp"
+[[ "$SHELLPACK_LOG" ]] && LOG_FILES_PATH="${SHELLPACK_LOG}"
+echo "deflog on" > ${LOG_FILES_PATH}/vm-install-screenrc
+# No "logfille FILENAME", that will be per-VM, defined later on command line
+echo "logfile flush 1" >> ${LOG_FILES_PATH}/vm-install-screenrc
+echo "log on" >> ${LOG_FILES_PATH}/vm-install-screenrc
+echo "logtstamp on" >> ${LOG_FILES_PATH}/vm-install-screenrc
+
+for VM in $(tr ',' '\n' <<< "$VMS")
+do
+	# Reset the falg (whether or not we are importing the VM, which OS we're
+	# deploying inside, etc) for each iteration, i.e., for each VM
+	POOL="" ; DISK_SPEC="" ; IMPORT="" ; IMPORT_DISK_FILE="" ; COPY_DISK_FILE="" ; COPY_DISK_DEST_PATH=""
+	MACHINE="" ; INTREMAP="" ; OSINFO="" ; LOCATION="" ; LOCATION_SPEC="" ; AUTOYAST="" ; AUTOYAST_INJECT=""
+	NETWORK_SPEC="" ; EXTRA_ARGS_SPEC="" ; OVMF_LOADER="" ; OVMF_TEMPLATE="" ; SERIAL_FILE=""
+
+	# If the VM is already defined, just leave it alone.
+	if kvm-check-defined "$VM" ; then continue ; fi
+
+	# TODO: For now, let's just keep this in autodetect mode
+	OSINFO="--osinfo detect=on,require=off"
+
+	# TODO: Make it possible to customize this, as it is the case for
+	# other parameters of the VM configuration (in the meantime, however,
+	# q35 is definitely a good default).
+	MACHINE="--machine q35"
+
+	# If vmname_MEMORY is defined (i.e., vm1_MEMORY, for a VM called
+	# vm1) use that. If not, check the global MMTests default. Otherwise,
+	# compute some kind of default value (suitable for running only one,
+	# pretty big, VM).
+	MEMORY="$(eval "echo \${${VM}_MEMORY}")"
+	[[ ! "$MEMORY" ]] && MEMORY="$MMTESTS_VMS_MEMORY"
+	if [[ ! "$MEMORY" ]]; then
+		MEMTOTAL_KBYTES=`grep ^MemTotal /proc/meminfo | awk '{print $2}'`
+		MEMORY="$((MEMTOTAL_KBYTES*4/5/1024))"
+	fi
+
+	# Same for vCPUs.
+	CPUS="$(eval "echo \${${VM}_CPUS}")"
+	[[ ! "$CPUS" ]] && CPUS="$MMTESTS_VMS_CPUS"
+	if [[ ! "$CPUS" ]]; then
+		CPUS=$(grep -c '^processor' /proc/cpuinfo)
+		NR_SPARE=$(numactl --hardware | grep cpus: | wc -l)
+		NR_SPARE=$((NR_SPARE*2))
+		if [ $CPUS -gt $((NR_SPARE*2)) ]; then
+			CPUS=$((CPUS-NR_SPARE))
+		fi
+	fi
+	# For big enough VMs (in terms of number of vCPUs) we may need to
+	# specify these additional parameters.
+	#
+	# TODO: This depends on libvirt, and it should be possible to check,
+	# dynamically, if they're really needed. For now, let's just always
+	# include them.
+	if [[ $CPUS -gt 255 ]]; then
+		INTREMAP="--iommu model=intel,driver.intremap=on,driver.eim=on --features ioapic.driver=qemu"
+	fi
+
+	# VMs' disks live in "pools". Determine which one we're using, for
+	# this VM.
+	[[ "$DISK_POOL" ]] && POOL="$DISK_POOL"
+	[[ ! "$POOL" ]] && POOL="$(eval "echo \$${VM}_DISK_POOL")"
+	[[ ! "$POOL" ]] && POOL="$MMTESTS_VMS_DISK_POOL"
+	[[ ! "$POOL" ]] && POOL="default"
+
+	# VMs can be "imported", from already existing disk images. That saves
+	# the time of performing an actual OS deploy, so it can be quite handy.
+	# In case they are imported, the source disk image should either be the
+	# one that will be actually used for the new VM (but we may have
+	# problems if multiple VMs try to use the same disk image at the same
+	# time!), or we can use a copy of it.
+	[[ "$IMPORT_DISK" ]] && IMPORT_DISK_FILE="$IMPORT_DISK"
+	[[ ! "$IMPORT_DISK_FILE" ]] && IMPORT_DISK_FILE="$(eval "echo \$${VM}_IMPORT_DISK_FILE")"
+	[[ ! "$IMPORT_DISK_FILE" ]] && IMPORT_DISK_FILE="$MMTESTS_VMS_IMPORT_DISK_FILE"
+	[[ "$COPY_DISK" ]] && COPY_DISK_FILE="$COPY_DISK"
+	[[ ! "$COPY_DISK_FILE" ]] && COPY_DISK_FILE="$(eval "echo \$${VM}_COPY_DISK_FILE")"
+	[[ ! "$COPY_DISK_FILE" ]] && COPY_DISK_FILE="$MMTESTS_VMS_COPY_DISK_FILE"
+	if [[ "$IMPORT_DISK_FILE" ]] && [[ "$COPY_DISK_FILE" ]]; then
+		echo "ERROR: Cannot both copy and import the same disk file"
+		exit -1
+	fi
+
+	if [[ "$IMPORT_DISK_FILE" ]] || [[ "$COPY_DISK_FILE" ]]; then
+		if [[ "$COPY_DISK_FILE" ]]; then
+			# We're importing from a disk image, instead of deploying.
+			# And the disk image from which we're creating the VM will
+			# be a copy of another, already existing, disk image.
+			[[ "$COPY_DISK_DEST" ]] && COPY_DISK_DEST_PATH="$COPY_DISK_DEST"
+			[[ ! "$COPY_DISK_DEST_PATH" ]] && COPY_DISK_DEST_PATH="$(eval "echo \$${VM}_COPY_DISK_DEST_PATH")"
+			[[ ! "$COPY_DISK_DEST_PATH" ]] && COPY_DISK_DEST_PATH="$MMTESTS_VMS_COPY_DISK_DEST_PATH"
+			if [[ ! "$COPY_DISK_DEST_PATH" ]]; then
+				if ! check_disk_pool "$POOL" ; then
+					echo "ERROR: requested storage pool $POOL for $VM is not available"
+					exit 1
+				fi
+				COPY_DISK_DEST_PATH=$(virsh pool-dumpxml "$POOL" | grep -i path | xmllint --xpath 'string(//path)' -)
+			fi
+			# The name of the actual disk image of the new VM (i.e., the
+			# destination file of the copy), we determine it randomly,
+			# to avoid clashed and conflicts.
+			COPY_DISK_DEST_FILE=$(mktemp "${COPY_DISK_DEST_PATH}/${VM}-XXXX.disk")
+			cp -a "$COPY_DISK_FILE" "$COPY_DISK_DEST_FILE"
+			if [[ $? -ne 0 ]]; then
+				echo "ERROR: failed to copy $COPY_DISK_FILE to $COPY_DISK_DEST_FILE (for $VM)"
+				exit -1
+			fi
+			DISK_SPEC="$COPY_DISK_DEST_FILE"
+		else
+			# We are importing and will be using the specified disk image
+			# as the actual disk image of the new VM.
+			DISK_SPEC="$IMPORT_DISK_FILE"
+		fi
+                DISK_SPEC="${DISK_SPEC},bus=virtio,discard=unmap"
+		IMPORT="--import"
+	else
+		# No import. We want a new disk image created specifically for
+		# this VM. What we need, in this case, is the characteristics
+		# of the disk image itself, e.g., it's size.
+		DISK_SPEC="$(eval "echo \$${VM}_DISC_SPEC")"
+		[[ ! "$DISK_SPEC" ]] && DISK_SPEC="$MMTESTS_DISK_SPEC"
+		if [[ ! "$DISK_SPEC" ]]; then
+			[[ "$FILE_SIZE" ]] && DISK_FILE_SIZE="$FILE_SIZE"
+			[[ ! "$DISK_FILE_SIZE" ]] && DISK_FILE_SIZE=$(eval "echo \$${VM}_DISK_FILE_SIZE")
+			[[ ! "$DISK_FILE_SIZE" ]] && DISK_FILE_SIZE="$MMTESTS_VMS_DISK_FILE_SIZE"
+			# TODO: Make this a variable. For now, let's just
+			# default to a 12 GB disk file image
+			[[ ! "$DISK_FILE_SIZE" ]] && DISK_FILE_SIZE=12
+			DISK_SPEC="size=$DISK_FILE_SIZE,pool=$POOL,bus=virtio,discard=unmap"
+		fi
+		POOL=$(echo ${DISK_SPEC}|grep -o 'pool=.*'|cut -f2 -d'='|cut -f1 -d',')
+		if check_disk_pool "$POOL" ; then
+			echo "ERROR: requested storage pool $POOL for $VM is not available"
+			exit 1
+		fi
+	fi
+	if [[ "$IMPORT" ]] && echo $DISK_SPEC | grep -q 'size=' ; then  
+		echo "ERROR: cannot both import a disk and define a new one for $VM"
+		exit -1
+	fi
+	# At this point, whether we're importing or creating a new one, we
+	# must have a valid disk specification that libvirt can consume.
+	if [[ ! "$DISK_SPEC" ]]; then
+		echo "ERROR: no suitable storage spec. defined for $VM"
+		exit 1
+	fi
+
+	# TODO: Introduce support for defining and using multiple disks
+
+	# Of course, we're only interested in all the information about which
+	# OS to deploy inside a VM, if we're creating it from scratch and not
+	# importing it from an already existing disk image.
+	if [[ ! "$IMPORT" ]]; then
+		DEPLOY_DISTRO="$DISTRO"
+		[[ ! "$DEPLOY_DISTRO" ]] && DEPLOY_DISTRO="$(eval "echo \$${VM}_DEPLOY_DISTRO")"
+		[[ ! "$DEPLOY_DISTRO" ]] && DEPLOY_DISTRO="$MMTESTS_VMS_DEPLOY_DISTRO"
+		if [[ ! "$DEPLOY_DISTRO" ]] && [[ -f ~/.marvin.deploy.distro ]]; then
+			DEPLOY_DISTRO=$(cat ~/.marvin.deploy.distro)
+		fi
+		if [[ ! "$DEPLOY_DISTRO" ]] && [[ -f ~/.mmtests.deploy.distro ]]; then
+			DEPLOY_DISTRO=$(cat ~/.mmtests.deploy.distro)
+		fi
+		[[ ! "$DEPLOY_DISTRO" ]] && DEPLOY_DISTRO="openSUSE-Tumbleweed"
+
+		LOCATION="$(eval "echo \$${VM}_INSTALL_LOCATION")"
+		[[ ! "$LOCATION" ]] && LOCATION="$MMTESTS_VMS_INSTALL_LOCATION"
+
+		AUTOYAST="$(eval "echo \$${VM}_AUTOYAST")"
+		[[ ! "$AUTOYAST" ]] && AUTOYAST=$(check_autoyast "$MMTESTS_VMS_AUTOYAST")
+		[[ ! "$AUTOYAST" ]] && AUTOYAST="$MMTESTS_VMS_AUTOYAST"
+		if [[ ! "$AUTOYAST" ]] || [[ ! -f "$AUTOYAST" ]]; then
+			# If we still don't have a path for the AutoYaST file,
+			# check (in this order) if any of the following files
+			# exists:
+			# - <vmname>.xml
+			# - <vmname>_<distroname>.xml
+			# - <vmname>_<distroname>_autoyast.xml
+			# - just <vmname>_autoyast.xml
+			# - just <distroname>_autoyast.xml
+			# - just <distroname>.xml
+			# - just autoyast.xml
+			for DIR in ${CFGDIRS[@]}; do
+				# If we have a candidate file, but it coresponds to no existing file,
+				# check if maybe it's inside any of the dirs.
+				[[ "$AUTOYAST" ]] && AUTOYAST=$(check_autoyast "${DIR}/${AUTOYAST}")
+				# Apparently not (or yes, but it wasn't valid). Let the guesswork begin...
+				[[ ! "$AUTOYAST" ]] && AUTOYAST=$(check_autoyast "${DIR}/${VM}.xml")
+				[[ ! "$AUTOYAST" ]] && AUTOYAST=$(check_autoyast "${DIR}/${VM}_${DEPLOY_DISTRO}.xml")
+				[[ ! "$AUTOYAST" ]] && AUTOYAST=$(check_autoyast "${DIR}/${VM}_${DEPLOY_DISTRO}_autoyast.xml")
+				[[ ! "$AUTOYAST" ]] && AUTOYAST=$(check_autoyast "${DIR}/${VM}_autoyast.xml")
+				[[ ! "$AUTOYAST" ]] && AUTOYAST=$(check_autoyast "${DIR}/${DEPLOY_DISTRO}_autoyast.xml")
+				[[ ! "$AUTOYAST" ]] && AUTOYAST=$(check_autoyast "${DIR}/${DEPLOY_DISTRO}.xml")
+				[[ ! "$AUTOYAST" ]] && AUTOYAST=$(check_autoyast "${DIR}/autoyast.xml")
+				[[ "$AUTOYAST" ]] && break
+			done
+		fi
+
+		# If an install location and the path to an AutoYaST file have
+		# been defined, specifically for this VM, or if we have valid
+		# defaults, we're done. If not, we check if we can figure these
+		# information out of the distribution deploy specification
+		# table.
+		if [[ ! "$LOCATION" ]] || [[ ! "$AUTOYAST" ]]; then
+			CONFIG_SPEC=$(echo "$MMTESTS_DEPLOY_DISTRO_SPEC" | grep ^$DEPLOY_DISTRO@ | tail -1)
+			if [[ ! "$CONFIG_SPEC" ]]; then
+				echo "ERROR: Distribution $DEPLOY_DISTRO does not have a deployment specification"
+				exit 1
+			fi
+
+			[[ ! "$LOCATION" ]] && LOCATION=$(echo $CONFIG_SPEC | awk -F @ '{print $2}')
+			if [[ ! "$AUTOYAST" ]]; then
+			       AUTOYAST=$(echo $CONFIG_SPEC | awk -F @ '{print $3}')
+			       AUTOYAST=$(check_autoyast "$AUTOYAST")
+			fi
+		fi
+		# At this point we must have them, or there's no way we can
+		# proceed any further.
+		if [[ ! "$LOCATION" ]] || [[ ! "$AUTOYAST" ]]; then
+			echo "ERROR: install location or autoyast profile missing or invalid"
+			exit 1
+		fi
+		LOCATION_SPEC="--location $LOCATION"
+
+		# The AutoYaST profile can be a local file or an URL
+		if [[ -f "$AUTOYAST" ]]; then
+			# If it's a local file, we inject it into the VM's
+			# initrd image, used during install.
+			AUTOYAST_INJECT="--initrd-inject $AUTOYAST"
+			AUTOYAST_SPEC="autoyast=file:///$(basename $AUTOYAST)"
+			cp "$AUTOYAST" "${LOG_FILES_PATH}/${VM}-autoyast"
+		else
+			# If it's not a file, let's assume it's some kind of
+			# URL and try to donwload it...
+			AUTOYAST_SPEC="autoyast=$AUTOYAST"
+			wget "$AUTOYAST" -O "${LOG_FILES_PATH}/${VM}-autoyast"
+		fi
+		EXTRA_ARGS_SPEC="--extra-args \"network=1 install=$LOCATION $AUTOYAST_SPEC console=ttyS0,115200n8\""
+	fi
+
+	SERIAL_FILE="${LOG_FILES_PATH}/${VM}-serial.log"
+	SCREEN_FILE="${LOG_FILES_PATH}/${VM}-install-screen.log"
+	rm -f "$SCREEN_FILE" "$SERIAL_FILE"
+
+	# TODO: Support for this needs to be implemented properly.
+	# E.g., we must make sure that the logs actually go to the
+	# serial console, etc.
+	[[ "$MMTESTS_VMS_SERIAL_CONSOLE_LOGS" == "yes" ]] && SERIAL="--serial file,path=${SERIAL_FILE}"
+
+	echo -ne "VM: $VM
+\tMemory: $MEMORY
+\tCPUs: $CPUS
+\tDistro: $DEPLOY_DISTRO
+\t\tDeploy location: $LOCATION
+\t\tAutoyast config: $AUTOYAST
+\tDisk: $DISK_SPEC\n
+"
+
+	# Let's start the install
+	MMTESTS_VMS_CONNECT="--connect qemu:///system"
+	MMTESTS_VMS_TYPE="--virt-type kvm"
+
+	# TODO: introduce and deal with tuning (e.g., cpusets, NUMA, etc)
+
+	CMD="screen -c ${LOG_FILES_PATH}/vm-install-screenrc -Logfile $SCREEN_FILE -D -m -S \"$VM\"
+		virt-install
+		$MMTESTS_VMS_CONNECT
+		$OSINFO
+		$MMTESTS_VMS_TYPE
+                $MACHINE
+		--name "${VM}"
+		$GRAPHICS_SWITCH
+		--vcpus "$CPUS"
+                $INTREMAP
+		$MEMORY_SWITCH "$MEMORY"
+		--disk "$DISK_SPEC"
+		$IMPORT
+                $NETWORK_SPEC
+		$LOCATION_SPEC
+		$EXTRA_ARGS_SPEC
+		$AUTOYAST_INJECT
+		$BOOT_SWITCH
+		--serial pty
+		--console pty,target_type=serial
+		SERIAL &"
+
+	# We now trigger the installation of this VM. If we're defining
+	# more than one, they'll be installed in parallel.
+	eval ${CMD}
+
+	# Give it a sec, then check if virt-install actually started. If not
+	# we most likely have a problem in the command line parameters.
+	sleep 5
+	VIRT_INSTALL_PID=$(ps -C virt-install -F | grep " --name $VM " | awk '{print $2};')
+	if [[ ! "$VIRT_INSTALL_PID" ]]; then
+		echo "ERROR: virt-install for $VM did not start. Command line was:"
+		echo " $CMD"
+		exit 1
+	fi
+done
+
+# Now we need to wait for the (potentially) various installs that we started,
+# to finish. One way of doing that is checking the serial console output of
+# the various VMs, and wait until they show the 'login:' prompt.
+for VM in $(tr ',' '\n' <<< "$VMS") ; do
+	SERIAL_FILE="${LOG_FILES_PATH}/${VM}-serial.log"
+	SCREEN_FILE="${LOG_FILES_PATH}/${VM}-install-screen.log"
+	[[ ! -f "$SCREEN_FILE" ]] && continue
+
+	# At this point, we expect the VM do be defined and become
+	# "running" pretty quickly.
+	while ! kvm-check-defined --vm $VM ; do sleep 10 ; done
+	while ! kvm-check-running --vm $VM ; do sleep 5 ; done
+
+	while true ; do
+		if tail -1 "$SCREEN_FILE" | grep -q " login:" ; then break ; fi
+		if [[ -f "$SERIAL_FILE" ]] && tail -1 "$SERIAL_FILE" | grep -q " login:" ; then break ; fi
+
+		# TODO: In case we're using SecureBoot, this is probably where
+		# we may need to do the mok enrollment and all that stuff. We
+		# (hopefully!) can take advantage of the fact that we have a
+		# screen session where the installation is running in.
+
+		sleep 10
+	done
+
+	# Finally, let's doublle check that the deployed VM is reachable
+	GUEST_IP=$(kvm-ip-address --vm "$VM" 600)
+	if [ $? -ne 0 ]; then
+		echo "ERROR: $VM is not reachable"
+		exit 1
+	fi
+	wait_ssh_available $GUEST_IP
+done
+
+# Hopefully, all the VMs have been installed fine, which means they're still
+# running. Let's shut them down, so all the VMs --the one that we installed
+# and the ones that we didn't touch, e.g., because they were already there---
+# are in the same state.
+kvm-stop --vm $VMS
+exit $?

@@ -119,6 +119,15 @@ while true; do
 			done
 			shift 2
 			;;
+		-A|--vm-aytoyast-dir)
+			# We will pass this to kvm-deploy
+			ADIRS=$(echo ${2// /,})
+			for DIR in $(tr ',' '\n' <<< "$ADIRS")
+			do
+				VM_AYAST_DIR="$VM_AYAST_DIR --dir $DIR"
+			done
+			shift 2
+			;;
 		-h|--help)
 			usage
 			exit 0
@@ -172,6 +181,19 @@ fi
 # In any case, we will always check at least in MMTests main directory.
 VM_XML_DIR="$VM_XML_DIR --dir $SCRIPTDIR"
 
+# Same applies to the case when MMTESTS_VMS_AUTOYAST_DIR is present in the
+# host config file.
+if [ ! -z $MMTESTS_VMS_AYAST_DIR ] ; then
+	DIRS=$(echo ${MMTESTS_VMS_AYAST_DIR// /,})
+	for DIR in $(tr ',' '\n' <<< "$DIRS")
+	do
+		VM_AYAST_DIR="$VM_AYAST_DIR --dir $DIR"
+	done
+fi
+# And we will always check in the main MMTests directory and in an ./autoyast
+# directory, if it exists.
+[ -d "${SCRIPTDIR}/autoyast" ] && VM_AYAST_DIR="$VM_AYAST_DIR --dir ${SCRIPTDIR}/autoyast"
+VM_AYAST_DIR="$VM_AYAST_DIR --dir $SCRIPTDIR"
 
 # Command line has priority. However, if there wasn't any `--vm` param, check
 # if we have a list of VMs to use in the config files. If there's nothing
@@ -339,6 +361,12 @@ else
 	kvm-define --vm $VMS $VM_XML_DIR
 	if [ $? -ne 0 ]; then
 		echo "ERROR: could not prepare all the necessary VMs"
+		exit 1
+	fi
+
+	kvm-deploy --vm $VMS $VM_AYAST_DIR
+	if [ $? -ne 0 ]; then
+		echo "ERROR: could not deploy all the necessary VMs"
 		exit 1
 	fi
 

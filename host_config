@@ -55,21 +55,6 @@ export AUTO_PACKAGE_INSTALL="yes"
 # config file that we find.
 #export MMTESTS_VMS_XML_DIR=
 
-# If the VMs are up already, and we know their IPs, we can
-# use them directly. Note that this means:
-# - run-kmv.sh will not (try to) power on the VMs, it will
-#   assume that they're up already and go straight to try
-#   to connect to them
-# - run-kvm.sh will not (try to) shutdonw the VMs at the
-#   end of the benchmark, it will just leave them as they
-#   are
-# - the MMTESTS_VMS array must be provided as well, and it
-#   must have the same number of entries than MMTESTS_VMS_IP
-#   (and names will be associated with IPs in the order they
-#   are found in the two arrays)
-#export MMTESTS_VMS_IP="192.168.122.24 192.168.122.38"
-#export MMTESTS_VMS="vm_a vm_b"
-
 # If `numad` should be used on the host
 #export MMTESTS_NUMA_POLICY="numad"
 
@@ -84,3 +69,79 @@ export MONITORS_WITH_LATENCY="vmstat"
 export MONITORS_TRACER="perf-event-stat"
 export MONITOR_PERF_EVENTS=cpu-migrations,context-switches
 export MONITOR_UPDATE_FREQUENCY=10
+
+# List of VMs inside which to run the tests
+# (if not specified via command line)
+#export MMTESTS_VMS="vm1 vm2"
+
+# If the VMs are up already, and we know their IPs, we can
+# use them directly. Note that this means:
+# - run-kmv.sh will not (try to) power on the VMs, it will
+#   assume that they're up already and go straight to try
+#   to connect to them
+# - run-kvm.sh will not (try to) shutdonw the VMs at the
+#   end of the benchmark, it will just leave them as they
+#   are
+# - the MMTESTS_VMS array must be provided as well, and it
+#   must have the same number of entries than MMTESTS_VMS_IP
+#   (and names will be associated with IPs in the order they
+#   are found in the two arrays)
+#export MMTESTS_VMS_IP="192.168.122.24 192.168.122.38"
+
+# The location of config files for guests (e.g., libvirt xml
+# config files for VMs) that are not defined already when
+# starting the benchmark and that MMTests have then to create,
+# can be speficied in this variable. Note that, If using both
+# this variable and the --vm-cfg-path command line switch, the
+# latter will have priority. And, as a last resort, we will
+# also always check in MMTests directory.
+#export MMTESTS_VMS_CFG_DIR=
+
+# Default values for VMs configuration, if they are automatically
+# deployed.
+
+# Install location, distribution and AutoYaST file, valid for all
+# VMs (unless a more specific entry is present below).
+#export MMTESTS_VMS_INSTALL_LOCATION=
+#export MMTESTS_VMS_AUTOYAST_DIR=
+#export MMTESTS_VMS_AUTOYAST="${SCRIPTDIR}/autoyast/opensuse.xml.erb"
+#export MMTESTS_VMS_DEPLOY_DISTRO="openSUSE-Tumbleweed"
+
+# MMTESTS_DEPLOY_DISTRO_SPEC is a "table" where:
+# - each "row" describes an OS/distribution that can be deployed inside a VM;
+# - the first "column" is the tag/name, used to refer to the entire row in
+#   various places (e.g., in the MMTESTS_VMS_DEPLOY_DISTRO variable);
+# - the second "column" is the so-called install location, i.e., from where
+#   the kernel and intrd images and the various packages should be retrieved
+#   (in case of network-based deployments);
+# - the third "column" is the name (or the path) of an AutoYaST file, used
+#   for making sure that the deploy happens in a fully non-interactive way.
+#   It can be the path of a valid AutoYaST profile that MMTests can fetch
+#   on the local filesystem, or the URL of one.
+#export MMTESTS_DEPLOY_DISTRO_SPEC="
+#openSUSE-Leap-15.3@https://download.opensuse.org/pub/opensuse/distribution/leap/15.3/repo/oss/@openSUSE-Leap-15.3.xml
+#openSUSE-Leap-15.4@https://download.opensuse.org/pub/opensuse/distribution/leap/15.4/repo/oss/@openSUSE-Leap.xml
+#openSUSE-Tumbleweed@https://download.opensuse.org/pub/opensuse/tumbleweed/repo/oss/@$MMTESTS_VMS_AUTOYAST
+#"
+
+# Characteristics of the VMs. Valid for all VMs, unless a more
+# specific entry is present (below).
+#export MMTESTS_VMS_MEMORY=
+#export MMTESTS_VMS_CPUS=
+#export MMTESTS_VMS_DISK_FILE_SIZE=
+#export MMTESTS_VMS_DISK_POOL=
+
+# If the VM(s) is (are) imported, its (their) disk image can be
+# a copy of an already existing one:
+#export MMTESTS_VMS_COPY_DISK_FILE=/vmimages/vms.disk
+
+# All the above entries can be made more specific, e.g., they can be
+# specialized on a per-VM basis. This is done by defining the proper
+# config variables with the name of the VM (as defined in the MMTESTS_VMS
+# array) as prefix, in spite of MMTESTS_.
+#
+# For example, this is how one can specify that vm1 should be a deploy
+# of openSUSE Tumbleweed, with 4 vCPUs and 4 GB of RAM:
+#export vm1_DEPLOY_DISTRO="openSUSE-Tumbleweed"
+#export vm1_CPUS=4
+#export vm1_MEMORY=4096
