@@ -141,6 +141,14 @@ export MONITOR_UPDATE_FREQUENCY=10
 # a copy of an already existing one:
 #export MMTESTS_VMS_COPY_DISK_FILE=/vmimages/vms.disk
 
+# Another possibility is to import a disk image, but instead of
+# actually using it as the disk of the VM, create a COW snapshot
+# of it, and use that as the virtual storage for the VM. This
+# (usually) saves both space and time (during the VM creation)
+# phase, while introducing some resource coupling/sharing, which
+# may (or may not!) impact performance.
+#export MMTESTS_VMS_COPY_DISK_COW="false"
+
 # All the above entries can be made more specific, e.g., they can be
 # specialized on a per-VM basis. This is done by defining the proper
 # config variables with the name of the VM (as defined in the MMTESTS_VMS
