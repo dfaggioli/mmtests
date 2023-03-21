@@ -443,6 +443,28 @@ function libvirt::_get_vm_prop() {
 	echo "${val}"
 }
 
+# Resolves the deployment specification for a given distribution
+# Merges internal defaults with user-defined overrides in MMTESTS_DEPLOY_DISTRO_SPEC
+# Applies a last-match-wins logic to allow users to override default entries
+# Parameters: <distro_name>
+function libvirt::_get_distro_spec() {
+	local distro="${1:-}"
+	[[ -z "${distro}" ]] && return 0
+
+
+	# Define base defaults
+	# Appending the user variable at the bottom ensures overrides are read last
+	local default_spec="
+openSUSE-Leap-15.3@https://download.opensuse.org/pub/opensuse/distribution/leap/15.3/repo/oss/@${SCRIPTDIR}/autoyast/openSUSE-Leap-15.3.xml
+openSUSE-Leap-15.4@https://download.opensuse.org/pub/opensuse/distribution/leap/15.4/repo/oss/@${SCRIPTDIR}/autoyast/openSUSE-Leap-15.4.xml
+openSUSE-Tumbleweed@https://download.opensuse.org/pub/opensuse/tumbleweed/repo/oss/@${SCRIPTDIR}/autoyast/openSUSE-Tumbleweed.xml
+${MMTESTS_DEPLOY_DISTRO_SPEC:-}
+"
+
+	# Parse the table and retain only the last matched row
+	echo "${default_spec}" | awk -v d="${distro}@" '$0 ~ "^" d { match_line=$0 } END { if (match_line) print match_line }' || true
+}
+
 # Triggers the background deployment of a VM with virt-install. If there's
 # the need to deploy multiple VMs, this function can be called for all of them,
 # so installation can happen in parallel.
@@ -631,9 +653,11 @@ function libvirt::vm_deploy_start() {
 				candidate=$(libvirt::_check_autoyast "${dir}/${vm}_${distro}.xml") ||
 				candidate=$(libvirt::_check_autoyast "${dir}/${vm}_${distro}_autoyast.xml") ||
 				candidate=$(libvirt::_check_autoyast "${dir}/${vm}_autoyast.xml") ||
+				candidate=$(libvirt::_check_autoyast "${MMTESTS_VMS_AUTOYAST:-}") ||
 				candidate=$(libvirt::_check_autoyast "${dir}/${distro}_autoyast.xml") ||
 				candidate=$(libvirt::_check_autoyast "${dir}/${distro}.xml") ||
-				candidate=$(libvirt::_check_autoyast "${dir}/autoyast.xml") || candidate=""
+				candidate=$(libvirt::_check_autoyast "${dir}/autoyast.xml") ||
+				candidate=$(libvirt::_check_autoyast "${SCRIPTDIR}/autoyast/opensuse.xml.erb") || candidate=""
 
 				if [[ -n "${candidate}" ]]; then
 					autoyast="${candidate}"
