@@ -71,6 +71,10 @@ do
 		COPY_DISK="$2"
 		shift 2
 		;;
+	--disk-copy-cow)
+		COPY_COW="true"
+		shift
+		;;
 	--disk-copy-dest-path)
 		COPY_DISK_DEST="$2"
 		shift 2
@@ -129,7 +133,7 @@ for VM in $(tr ',' '\n' <<< "$VMS")
 do
 	# Reset the falg (whether or not we are importing the VM, which OS we're
 	# deploying inside, etc) for each iteration, i.e., for each VM
-	POOL="" ; DISK_SPEC="" ; IMPORT="" ; IMPORT_DISK_FILE="" ; COPY_DISK_FILE="" ; COPY_DISK_DEST_PATH=""
+	POOL="" ; DISK_SPEC="" ; IMPORT="" ; IMPORT_DISK_FILE="" ; COPY_DISK_FILE="" ; COPY_DISK_COW="" ; COPY_DISK_DEST_PATH=""
 	MACHINE="" ; INTREMAP="" ; OSINFO="" ; LOCATION="" ; LOCATION_SPEC="" ; AUTOYAST="" ; AUTOYAST_INJECT=""
 	NETWORK_SPEC="" ; EXTRA_ARGS_SPEC="" ; OVMF_LOADER="" ; OVMF_TEMPLATE="" ; SERIAL_FILE=""
 
@@ -195,8 +199,15 @@ do
 	[[ "$COPY_DISK" ]] && COPY_DISK_FILE="$COPY_DISK"
 	[[ ! "$COPY_DISK_FILE" ]] && COPY_DISK_FILE="$(eval "echo \$${VM}_COPY_DISK_FILE")"
 	[[ ! "$COPY_DISK_FILE" ]] && COPY_DISK_FILE="$MMTESTS_VMS_COPY_DISK_FILE"
+	[[ "$COPY_COW" ]] && COPY_DISK_COW="$COPY_COW"
+	[[ ! "$COPY_DISK_COW" ]] && COPY_DISK_COW="$(eval "echo \$${VM}_COPY_DISK_COW")"
+	[[ ! "$COPY_DISK_COW" ]] && COPY_DISK_COW="$MMTESTS_VMS_COPY_DISK_COW"
 	if [[ "$IMPORT_DISK_FILE" ]] && [[ "$COPY_DISK_FILE" ]]; then
 		echo "ERROR: Cannot both copy and import the same disk file"
+		exit -1
+	fi
+	if [[ "$COPY_DISK_COW" == "true" ]] && [[ ! "$COPY_DISK_FILE" ]]; then
+		echo "ERROR: Unknown backing disk file for COW for $VM"
 		exit -1
 	fi
 
@@ -219,7 +230,13 @@ do
 			# destination file of the copy), we determine it randomly,
 			# to avoid clashed and conflicts.
 			COPY_DISK_DEST_FILE=$(mktemp "${COPY_DISK_DEST_PATH}/${VM}-XXXX.disk")
-			cp -a "$COPY_DISK_FILE" "$COPY_DISK_DEST_FILE"
+			if [[ "$COPY_DISK_COW" == "true" ]]; then
+				install-depends qemu-tools
+				# TODO: Check that the original file is actuallly a qcow2 image!
+				qemu-img create -f qcow2 -F qcow2 -b "$COPY_DISK_FILE" "$COPY_DISK_DEST_FILE"
+			else
+				cp -a "$COPY_DISK_FILE" "$COPY_DISK_DEST_FILE"
+			fi
 			if [[ $? -ne 0 ]]; then
 				echo "ERROR: failed to copy $COPY_DISK_FILE to $COPY_DISK_DEST_FILE (for $VM)"
 				exit -1
