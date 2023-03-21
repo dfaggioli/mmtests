@@ -39,7 +39,14 @@ check_autoyast () {
 }
 
 # Format is distribution@install_location@autoyast. See host_config for more
-# info and examples (MMTESTS_DEPLOY_DISTRO_SPEC).
+# info and examples
+MMTESTS_DEPLOY_DISTRO_SPEC="
+SLE-15-SP4@http://ibs-mirror.shuttlenet.prv.suse.net/install/SLP/SLE-15-SP4-Full-LATEST/x86_64/DVD1/@${MMTESTS_VMS_AUTOYAST:-${SCRIPTDIR}/autoyast/SLE-15-SP4.xml}
+openSUSE-Leap-15.4@https://download.opensuse.org/pub/opensuse/distribution/leap/15.4/repo/oss/@${MMTESTS_VMS_AUTOYAST:-${SCRIPTDIR}/autoyast/opensuse.xml.erb}
+openSUSE-Leap-15.3@https://download.opensuse.org/pub/opensuse/distribution/leap/15.3/repo/oss/@${MMTESTS_VMS_AUTOYAST:-${SCRIPTDIR}/autoyast/opensuse.xml.erb}
+openSUSE-Tumbleweed@https://download.opensuse.org/pub/opensuse/tumbleweed/repo/oss/@${MMTESTS_VMS_AUTOYAST:-${SCRIPTDIR}/autoyast/opensuse.xml.erb}
+$MMTESTS_DEPLOY_DISTRO_SPEC
+"
 
 VMS="$MARVIN_KVM_DOMAIN"
 
