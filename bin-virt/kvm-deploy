@@ -186,6 +186,9 @@ do
 	[[ ! "$POOL" ]] && POOL="$(eval "echo \$${VM}_DISK_POOL")"
 	[[ ! "$POOL" ]] && POOL="$MMTESTS_VMS_DISK_POOL"
 	[[ ! "$POOL" ]] && POOL="default"
+	if check_disk_pool "$POOL" ; then
+		POOL_PATH=$(virsh pool-dumpxml "$POOL" | grep -i path | xmllint --xpath 'string(//path)' -)
+	fi
 
 	# VMs can be "imported", from already existing disk images. That saves
 	# the time of performing an actual OS deploy, so it can be quite handy.
@@ -212,6 +215,24 @@ do
 	fi
 
 	if [[ "$IMPORT_DISK_FILE" ]] || [[ "$COPY_DISK_FILE" ]]; then
+		FILE="$IMPORT_DISK_FILE" ; [[ ! "$FILE" ]] && FILE="$COPY_DISK_FILE"
+		FILEN=$(echo "$FILE" | rev | cut -d'/' -f1 | rev)
+		# Let's try to support even the case where the filename is
+		# an URL (e.g., of a predefined image).
+		if [[ "$FILE" =~ ^(https?|ftp)://.* ]]; then
+			if [[ ! "$POOL_PATH" ]] ; then
+				echo "ERROR: trying to use disk pool $POOL for $VM but it is not available"
+				exit -1
+			fi
+			# Download it, in the pool path, unless it's there already
+			pushd "$POOL_PATH"
+			[[ ! -f "$FILEN" ]] && wget "$FILE"
+			popd
+			if [[ ! -f "${POOL_PATH}/${FILEN}" ]]; then
+				echo "ERROR: trying to import/copy from $FILE that cannot be downloaded"
+				exit -1
+			fi
+		fi
 		if [[ "$COPY_DISK_FILE" ]]; then
 			# We're importing from a disk image, instead of deploying.
 			# And the disk image from which we're creating the VM will
@@ -219,13 +240,7 @@ do
 			[[ "$COPY_DISK_DEST" ]] && COPY_DISK_DEST_PATH="$COPY_DISK_DEST"
 			[[ ! "$COPY_DISK_DEST_PATH" ]] && COPY_DISK_DEST_PATH="$(eval "echo \$${VM}_COPY_DISK_DEST_PATH")"
 			[[ ! "$COPY_DISK_DEST_PATH" ]] && COPY_DISK_DEST_PATH="$MMTESTS_VMS_COPY_DISK_DEST_PATH"
-			if [[ ! "$COPY_DISK_DEST_PATH" ]]; then
-				if ! check_disk_pool "$POOL" ; then
-					echo "ERROR: requested storage pool $POOL for $VM is not available"
-					exit 1
-				fi
-				COPY_DISK_DEST_PATH=$(virsh pool-dumpxml "$POOL" | grep -i path | xmllint --xpath 'string(//path)' -)
-			fi
+			[[ ! "$COPY_DISK_DEST_PATH" ]] && COPY_DISK_DEST_PATH="$POOL_PATH"
 			# The name of the actual disk image of the new VM (i.e., the
 			# destination file of the copy), we determine it randomly,
 			# to avoid clashed and conflicts.
@@ -249,6 +264,14 @@ do
 		fi
                 DISK_SPEC="${DISK_SPEC},bus=virtio,discard=unmap"
 		IMPORT="--import"
+		# TODO: Predefined images often have first-boot wizards and alike
+		# (at least, openSUSE ones do). Ideally, we'd like to skip those,
+		# and customize them non-interactively. A tool for the job could be
+		# 'guestfish', from libguestfs, but how to actually use if for that
+		# is not yet 100% clear. It will probably be something along the lines
+		# of:
+		#  install-depends libguestfs
+		#  guestfish --rw -a "$DISK_SPEC" -i rm /etc/systemd/system/default.target.wants/jeos-firstboot.service
 	else
 		# No import. We want a new disk image created specifically for
 		# this VM. What we need, in this case, is the characteristics
@@ -265,7 +288,8 @@ do
 			DISK_SPEC="size=$DISK_FILE_SIZE,pool=$POOL,bus=virtio,discard=unmap"
 		fi
 		POOL=$(echo ${DISK_SPEC}|grep -o 'pool=.*'|cut -f2 -d'='|cut -f1 -d',')
-		if check_disk_pool "$POOL" ; then
+		# POOL may be different from the one we already checked. So do it again
+		if ! check_disk_pool "$POOL" ; then
 			echo "ERROR: requested storage pool $POOL for $VM is not available"
 			exit 1
 		fi
