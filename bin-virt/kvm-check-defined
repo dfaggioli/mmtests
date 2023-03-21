@@ -1,8 +1,8 @@
 #!/bin/bash
 #
 # This script checks if a VM (passed as an argument) is running.
-# For now, this just mean checking if it is listed as 'running'
-# in `virsh list`.
+# For now, this just mean checking if it is present in the output
+# of `virsh list`.
 #
 # If no parameter is passed, it it assumed that there will be one
 # VM, whose name is either defined in $MARVIN_KVM_DOMAIN, or it's
@@ -16,7 +16,8 @@ VM=$MARVIN_KVM_DOMAIN
 [ "$1" = "--vm" ] && shift
 [ ! -z "$1" ] && VM="$1"
 
-if [ "`virsh list | grep " $VM " | awk '{print $3}' | grep running`" = "running" ]; then
+
+if [ "`virsh list --all | grep " $VM " | awk '{print $2}'`" = "$VM"  ]; then
 	exit 0
 fi
 exit 1
