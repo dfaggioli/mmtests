@@ -401,27 +401,31 @@ function setup_pssh() {
 }
 
 function deploy_mmtests() {
-	echo Creating archive
+	install-depends rsync
+
+	echo "Synchronizing mmtests directory to $VMCOUNT VMs..."
+
 	export NAME=$(basename ${SCRIPTDIR})
 	cd ..
-	tar -czf ${NAME}.tar.gz --exclude=${NAME}/work* --exclude=${NAME}/.git ${NAME} || die Failed to create mmtests archive
-	mv ${NAME}.tar.gz ${NAME}/
-	cd ${NAME}
-
-	# SCP_TARGET is just the path (i.e., '~') where to copy the archive on within
-	# the various VMs, if we have more than 1, or just "root@GUEST_IP:~"
-	echo Uploading and extracting new mmtests
-	${PSCP} ${PSSH_OPTS} ${NAME}.tar.gz ${SCP_TARGET} || die Failed to upload ${NAME}.tar.gz
 
 	# SSH_TARGET is "", if we have more than 2 VMs and are using `pssh`(and
 	# all the targets are in PSSH_OPTS already) or "root@GUEST_IP", if we have
 	# only one VM.
-	${PSSH} ${PSSH_OPTS} ${SSH_TARGET} "mkdir -p git-private && rm -rf git-private/${NAME} && tar -C git-private -xf ${NAME}.tar.gz" || die Failed to extract ${NAME}.tar.gz
-	rm ${NAME}.tar.gz
+	${PSSH} ${PSSH_OPTS} ${SSH_TARGET} "mkdir -p git-private/${NAME}" || die "Failed to create target directory"
+	export RSYNC_RSH="ssh ${MMTESTS_SSH_OPTIONS}"
+
+	if [ $VMCOUNT -eq 1 ]; then
+		rsync -az --delete --exclude='work*' --exclude='.git' ${NAME}/ root@${GUEST_IP[1]}:git-private/${NAME}/ || die "Failed to rsync ${NAME}"
+	else
+		# Feed the GUEST_IP array (which already contains all IPs) to GNU parallel
+		parallel -j $VMCOUNT rsync -az --delete --exclude='work*' --exclude='.git' ${NAME}/ root@{}:git-private/${NAME}/ ::: "${GUEST_IP[@]}" || die "Failed to parallel rsync ${NAME}"
+	fi
 
 	# We'll be running benchmarks with [P]SSH, without a terminal, etc. We *must*
 	# be absolutely sure that packages are automatically installed.
 	${PSSH} ${PSSH_OPTS} ${SSH_TARGET} "touch ~/.mmtests-auto-package-install"
+
+	cd ${NAME}
 }
 
 function tune_system() {
