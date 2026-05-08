@@ -36,13 +36,13 @@ done
 trap "rm -f /tmp/screenrc-$$" EXIT
 
 sudo virsh dumpxml $KVM_DOMAIN &> /dev/null
-RUNNING="`sudo virsh list | grep " $KVM_DOMAIN " | awk '{print $3}'`"
+RUNNING="$(sudo virsh list | grep " $KVM_DOMAIN " | awk '{print $3}')"
 if [ "$RUNNING" != "running" ]; then
 	echo -n Waiting for domain to run
 	while [ "$RUNNING" != "running" ]; do
 		echo -n .
 		sleep 1
-		RUNNING="`sudo virsh list | grep " $KVM_DOMAIN " | awk '{print $3}'`"
+		RUNNING="$(sudo virsh list | grep " $KVM_DOMAIN " | awk '{print $3}')"
 	done
 fi
 

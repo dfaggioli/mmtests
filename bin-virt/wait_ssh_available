@@ -1,4 +1,5 @@
 #!/bin/bash
+#
 # Waits until a particular machine is running ssh and is available
 # Author: Mel Gorman <mgorman@suse.de>
 # Copyright: SUSE Labs 2013
@@ -18,7 +19,7 @@ fi
 MACHINE=$1
 RESET=$2
 
-EXPECT_SCRIPT=`mktemp`
+EXPECT_SCRIPT="$(mktemp)"
 cat > $EXPECT_SCRIPT <<EOF
 spawn ssh -o PubkeyAuthentication=no root@$MACHINE echo marvin-ping
 expect {

@@ -21,9 +21,9 @@ fi
 TIMEOUT=600
 for VM in $(tr ',' '\n' <<< "$VMS")
 do
-	if `kvm-check-running "$VM"` ; then
+	if "$(kvm-check-running "$VM")" ; then
 		echo $VM already running according to virsh
-		GUEST_IP=`kvm-ip-address --vm $VM 0`
+		GUEST_IP="$(kvm-ip-address --vm $VM 0)"
 		if [ $? -eq 0 ]; then
 			wait_ssh_available $GUEST_IP
 			continue
@@ -37,9 +37,9 @@ do
 	fi
 	echo Starting $VM
 	virsh start $VM
-	STARTTIME=`date +%s`
-	while ! `kvm-check-running "$VM"` ; do
-		CURRENTTIME=`date +%s`
+	STARTTIME="$(date +%s)"
+	while ! "$(kvm-check-running "$VM")" ; do
+		CURRENTTIME="$(date +%s)"
 		RUNNING=$((CURRENTTIME-STARTTIME))
 		if [ $RUNNING -gt $TIMEOUT ]; then
 			echo "ERROR: Timeout exceeded for $VM to become \'running\'"
@@ -54,7 +54,7 @@ done
 for VM in $(tr ',' '\n' <<< "$VMS")
 do
 	echo Waiting on $VM IP
-	GUEST_IP=`kvm-ip-address --vm $VM 600`
+	GUEST_IP="$(kvm-ip-address --vm $VM 600)"
 	if [ $? -eq 0 ]; then
 		wait_ssh_available $GUEST_IP
 		if [ $? -ne 0 ]; then
