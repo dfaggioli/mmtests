@@ -1,5 +1,5 @@
 #!/bin/bash
-
+#
 # Author: Dario Faggioli <dfaggioli@suse.com>
 # script for running mmtests in one or multiple VMs
 
@@ -120,8 +120,8 @@ function parse_args() {
 }
 
 function prologue() {
-	DIRNAME=$(dirname $0)
-	SCRIPTDIR=$(cd "$DIRNAME" && pwd)
+	DIRNAME="$(dirname $0)"
+	SCRIPTDIR="$(cd "$DIRNAME" && pwd)"
 
 	#set +euo pipefail
 	source $SCRIPTDIR/shellpacks/common.sh
@@ -219,10 +219,10 @@ function prepare_host() {
 
 		local c
 		for c in "${MMTESTS_CONFIGS[@]}"; do
-			if [ "`grep MMTESTS_HOST_IP ${c}`" = "" ] ; then
+			if [ "$(grep MMTESTS_HOST_IP ${c})" = "" ] ; then
 				echo "export MMTESTS_HOST_IP=${MMTESTS_HOST_IP}" >> ${c}
 			fi
-			if [ "`grep AUTO_PACKAGE_INSTALL ${c}`" = "" ] ; then
+			if [ "$(grep AUTO_PACKAGE_INSTALL ${c})" = "" ] ; then
 				echo "export AUTO_PACKAGE_INSTALL=\"yes\"" >> ${c}
 			fi
 		done
@@ -249,11 +249,11 @@ function tune_vms_running() {
 	# and with only one VM.
 	if [ "${OFFLINE_IOTHREADS:-}" = "yes" ] &&
 	    [ "$VMS" = "$MARVIN_KVM_DOMAIN" ]; then
-		local offline_cpus=`virsh dumpxml marvin-mmtests | grep -c iothreadpin`
+		local offline_cpus=$(virsh dumpxml marvin-mmtests | grep -c iothreadpin)
 		if [ "$offline_cpus" != "0" ]; then
 			echo Taking $offline_cpus offline for pinned io threads
-			for PHYS_CPU in `virsh dumpxml marvin-mmtests | grep iothreadpin | sed -e "s/.* cpuset='\([0-9]\+\)'.*/\1/"`; do
-				local VIRT_CPU=`virsh dumpxml marvin-mmtests | grep vcpupin | grep "cpuset='$PHYS_CPU'" | sed -e "s/.* vcpu='\([0-9]\+\)'.*/\1/"`
+			for PHYS_CPU in $(virsh dumpxml marvin-mmtests | grep iothreadpin | sed -e "s/.* cpuset='\([0-9]\+\)'.*/\1/"); do
+				local VIRT_CPU=$(virsh dumpxml marvin-mmtests | grep vcpupin | grep "cpuset='$PHYS_CPU'" | sed -e "s/.* vcpu='\([0-9]\+\)'.*/\1/")
 				ssh root@${GUEST_IP[1]} "echo 0 > /sys/devices/system/cpu/cpu$VIRT_CPU/online"
 				echo o Virt $VIRT_CPU phys $PHYS_CPU
 			done
@@ -302,18 +302,18 @@ function prepare_and_start_vms() {
 		if [ "${KEEP_KERNEL:-}" != "yes" ] &&
 		    [ "$VMS" = "$MARVIN_KVM_DOMAIN" ] &&
 		    [ -e $SCRIPTDIR/bin-virt/kvm-boot ]; then
-			echo Booting current kernel `uname -r` $MORE_BOOT_ARGS on the guest
-			kvm-boot `uname -r` $MORE_BOOT_ARGS || die Failed to boot `uname -r`
+			echo Booting current kernel $(uname -r) $MORE_BOOT_ARGS on the guest
+			kvm-boot $(uname -r) $MORE_BOOT_ARGS || die "Failed to boot $(uname -r)"
 		else
 			kvm-start --vm $VMS || die "Failed to boot VM(s)"
 		fi
 
-		teststate_log "VMs up :: `date +%s`"
+		teststate_log "VMs up :: $(date +%s)"
 
 		local v=1
 		for VM in $(tr ',' '\n' <<< "$VMS")
 		do
-			GUEST_IP[$v]=`kvm-ip-address --vm $VM`
+			GUEST_IP[$v]=$(kvm-ip-address --vm $VM)
 			echo "VM ready: $VM IP: ${GUEST_IP[$v]}"
 			SSH_HOST="root@${GUEST_IP[$v]}"
 			PSSH_HOSTS+=" -H $SSH_HOST"
@@ -405,12 +405,12 @@ function setup_pssh() {
 		PSSH_OPTS+=" -o $MMTESTS_PSSH_OUTDIR"
 	fi
 
-	teststate_log "vms ready :: `date +%s`"
+	teststate_log "vms ready :: $(date +%s)"
 }
 
 function deploy_mmtests() {
 	echo Creating archive
-	NAME=`basename $SCRIPTDIR`
+	NAME="$(basename $SCRIPTDIR)"
 	cd ..
 	tar -czf ${NAME}.tar.gz --exclude=${NAME}/work* --exclude=${NAME}/.git ${NAME} || die Failed to create mmtests archive
 	mv ${NAME}.tar.gz ${NAME}/
@@ -438,9 +438,9 @@ function tune_host() {
 
 	# Set performance governor on the host, if wanted
 	if [ "${FORCE_HOST_PERFORMANCE_SETUP:-}" = "yes" ]; then
-		FORCE_HOST_PERFORMANCE_SCALINGGOV_BASE=`cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor`
+		FORCE_HOST_PERFORMANCE_SCALINGGOV_BASE="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
 		local NOTURBO="/sys/devices/system/cpu/intel_pstate/no_turbo"
-		[ -f $NOTURBO ] && FORCE_HOST_PERFORMANCE_NOTURBO_BASE=`cat $NOTURBO`
+		[ -f $NOTURBO ] && FORCE_HOST_PERFORMANCE_NOTURBO_BASE=$(cat $NOTURBO)
 		force_performance_setup || true
 	fi
 }
@@ -573,7 +573,7 @@ function prepare_host_monitors() {
 # by putting together some service program.
 #
 function log_state() {
-	echo -ne "`date +%H:%M:%S` $1"
+	echo -ne "$(date +%H:%M:%S) $1"
 	[ "$1" == "test_do" ] && echo -ne "\t"
 	echo -ne " "
 }
@@ -583,13 +583,13 @@ function synchronize_vms() {
 		[ $VMCOUNT -ne 1 ] && echo "TIME     STATE           VMs"
 		local STATE="mmtests_start"
 		local tokens=0
-		local NCFILE=`mktemp`
+		local NCFILE="$(mktemp)"
 		nc ${_NCV:-} -n -4 -l -k $MMTESTS_HOST_IP $MMTESTS_HOST_PORT > $NCFILE &
 		NCPID=$!
 
 		tail -f $NCFILE | while [ "$STATE" != "QUIT" ] && read TOKEN
 		do
-			teststate_log "recvd token :: \"$TOKEN\" `date +%s`"
+			teststate_log "recvd token :: \"$TOKEN\" $(date +%s)"
 			# With only 1 VM, there is not much to be synched. We just need
 			# to reply with the very same token we receive, in order to
 			# unblock each phase of run-mmtests.sh, inside the VM itself.
@@ -597,11 +597,11 @@ function synchronize_vms() {
 				case "$TOKEN" in
 					"mmtests_start"|"test_do"|"iteration_begin"|"iteration_end"|"test_done")
 						mmtests_signal_token "$TOKEN" ${GUEST_IP[@]}
-						teststate_log "sent token :: \"$TOKEN\" `date +%s`"
+						teststate_log "sent token :: \"$TOKEN\" $(date +%s)"
 						;;
 					"mmtests_end")
 						mmtests_signal_token "mmtests_end" ${GUEST_IP[@]}
-						teststate_log "sent token :: \"$TOKEN\" `date +%s`"
+						teststate_log "sent token :: \"$TOKEN\" $(date +%s)"
 						STATE="QUIT"
 						;;
 					*)
@@ -617,7 +617,7 @@ function synchronize_vms() {
 							# DEBUG: not very useful info to print, unless we're debugging
 							#echo "run-kvm --> run-mmtests: state = $STATE"
 							log_state $STATE
-							teststate_log "enter state :: \"$STATE\" `date +%s`"
+							teststate_log "enter state :: \"$STATE\" $(date +%s)"
 							activity_log "run-kvm: state \"$STATE\""
 						fi
 						if [ "$TOKEN" != "$STATE" ]; then
@@ -644,7 +644,7 @@ function synchronize_vms() {
 							echo " Done!"
 							activity_log "run-kvm: sending token \"$TOKEN\""
 							mmtests_signal_token "$TOKEN" ${GUEST_IP[@]}
-							teststate_log "sent token :: \"$TOKEN\" `date +%s`"
+							teststate_log "sent token :: \"$TOKEN\" $(date +%s)"
 						fi
 						;;
 					"test_do2")
@@ -665,7 +665,7 @@ function synchronize_vms() {
 						# DEBUG: not very useful info to print, unless we're debugging
 						#echo "run-kvm --> run-mmtests: state = $STATE"
 						log_state $STATE ; echo -ne 'X'
-						teststate_log "enter state :: \"$STATE\" `date +%s`"
+						teststate_log "enter state :: \"$STATE\" $(date +%s)"
 						activity_log "run-kvm: state \"$STATE\""
 						;;
 					*)
@@ -720,8 +720,8 @@ function stop_vms() {
 	else
 		echo "Shutting down the VM(s)"
 		activity_log "run-kvm: Shutoff VMs"
-		kvm-stop --vm $VMS
-		teststate_log "VMs down :: `date +%s`"
+		kvm-stop --vm $VMS || true
+		teststate_log "VMs down :: $(date +%s)"
 	fi
 }
 
@@ -749,7 +749,7 @@ function execute_tests() {
 
 	activity_log "run-kvm: Iteration $((MMTEST_HOST_ITERATION+1)) start"
 
-	teststate_log "start :: `date +%s`"
+	teststate_log "start :: $(date +%s)"
 
 	sysstate_log_basic_info
 	collect_hardware_info
@@ -761,8 +761,8 @@ function execute_tests() {
 	deploy_mmtests
 
 	echo "Executing mmtests in $VMCOUNT guest(s)"
-	teststate_log "test begin :: `date +%s`"
-	activity_log "run-kvm: test start :: `date +%s`"
+	teststate_log "test begin :: $(date +%s)"
+	activity_log "run-kvm: test start :: $(date +%s)"
 
 	sysstate_log_proc_files "start"
 
@@ -781,14 +781,14 @@ function execute_tests() {
 	sysstate_log_proc_files "end"
 
 	echo "Execution in guest(s) ended. Status $EXIT_CODE"
-	activity_log "run-kvm: test end :: `date +%s` $EXIT_CODE"
-	teststate_log "test end :: `date +%s` $EXIT_CODE"
+	activity_log "run-kvm: test end :: $(date +%s) $EXIT_CODE"
+	teststate_log "test end :: $(date +%s) $EXIT_CODE"
 	if [[ -n "${SHELLPACK_LOG}" && -f "$SHELLPACK_LOG/timestamp" ]]; then
-		teststate_log "`cat $SHELLPACK_LOG/timestamp`"
+		teststate_log "$(< $SHELLPACK_LOG/timestamp)"
 		rm $SHELLPACK_LOG/timestamp
 	fi
 
-	teststate_log "finish :: `date +%s`"
+	teststate_log "finish :: $(date +%s)"
 
 	if [ "${HOST_LOGS:-}" = "yes" ]; then
 		dmesg > $SHELLPACK_LOG/dmesg
