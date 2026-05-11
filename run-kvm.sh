@@ -624,26 +624,36 @@ function synchronize_vms() {
 }
 
 function collect_results() {
-	echo Syncing "${SHELLPACK_LOG_BASE_SUBDIR}"
-	local v=1
-	for VM in $(tr ',' '\n' <<< "${VMS}")
-	do
-		# TODO: these two can probably be replaced with GNU parallel and rsync as well in the future
-		ssh "${MMTESTS_SSH_OPTIONS}" "root@${GUEST_IP[${v}]}" "cd git-private/${NAME} && tar -czf work-${VM_RUNNAME[${v}]}.tar.gz ${SHELLPACK_LOG_BASE_SUBDIR}" || die Failed to archive "${SHELLPACK_LOG_BASE_SUBDIR}"
-		scp "${MMTESTS_SSH_OPTIONS}" "root@${GUEST_IP[${v}]}:git-private/${NAME}/work-${VM_RUNNAME[${v}]}.tar.gz ." || die Failed to download work.tar.gz
+	echo "Syncing ${SHELLPACK_LOG_BASE_SUBDIR} from ${VMCOUNT} VMs"
 
+	# Archive results remotely with parallel. We use parallel's multiple input
+	# arrays (::: and :::+) to match IPs with their specific runnames.
+	echo "Archiving results on guests"
+	parallel -j "${VMCOUNT}" ssh ${MMTESTS_SSH_OPTIONS} root@{1} "'cd git-private/${NAME} && tar -czf work-{2}.tar.gz ${SHELLPACK_LOG_BASE_SUBDIR}'" \
+		::: "${GUEST_IP[@]}" :::+ "${VM_RUNNAME[@]}" || die "Failed to archive results remotely"
+
+	# Now we can download all the archives, also in parallel.
+	echo "Downloading archives"
+	parallel -j "${VMCOUNT}" scp ${MMTESTS_SSH_OPTIONS} "'root@{1}:git-private/${NAME}/work-{2}.tar.gz'" . \
+		::: "${GUEST_IP[@]}" :::+ "${VM_RUNNAME[@]}" || die "Failed to download archives"
+
+	# And, eventually, we extract and rename the directory in a way that's
+	# familiar for other MMTests tools.
+	echo "Extracting local archives"
+	local v
+	for (( v=1; v<=VMCOUNT; v++ )); do
 		# Do not change behavior, file names, etc, if no VM list is specified.
-		# That, in fact, is how currently Marvin works, and we don't want to
-		# break it.
-		local NEW_RUNNAME=${RUNNAME}
+		# That, in fact, is how currently Marvin works, and we don't want to break it.
+		local new_runname="${RUNNAME}"
 		if [ "${VMS_LIST:-}" = "yes" ]; then
-			NEW_RUNNAME="${VM_RUNNAME[${v}]}"
+			new_runname="${VM_RUNNAME[${v}]}"
 		fi
 
 		# Store the results of benchmark named `FOO`, done in VM 'bar' in
-		# a directory called 'bar-FOO.
-		tar --transform="s|${RUNNAME}|${NEW_RUNNAME}|" -xf work-"${VM_RUNNAME[${v}]}".tar.gz || die Failed to extract work.tar.gz
-		v=$(( v + 1 ))
+		# a directory called 'bar-FOO (and cleanup the now unnecessary archive).
+		local tar_file="work-${VM_RUNNAME[${v}]}.tar.gz"
+		tar --transform="s|${RUNNAME}|${new_runname}|" -xf ${tar_file} || die "Failed to extract ${tar_file}"
+		rm -f "${tar_file}"
 	done
 }
 
