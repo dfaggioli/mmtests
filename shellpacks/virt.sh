@@ -37,6 +37,18 @@ function vm_wait_ssh() {
 
 # Accepts the VM name as parameter (fallback to MARVIN_KVM_DOMAIN or
 # its default, if none is provided).
+function libvirt::vm_is_defined() {
+	local vm="${1:-${MARVIN_KVM_DOMAIN:-marvin-mmtests}}"
+
+	if virsh dominfo "${vm}" >/dev/null 2>&1; then
+		return "${SHELLPACK_SUCCESS}"
+	fi
+
+	return "${SHELLPACK_ERROR}"
+}
+
+# Accepts the VM name as parameter (fallback to MARVIN_KVM_DOMAIN or
+# its default, if none is provided).
 function libvirt::vm_is_running() {
 	local vm="${1:-${MARVIN_KVM_DOMAIN:-marvin-mmtests}}"
 	local state
@@ -142,6 +154,70 @@ function libvirt::vm_ip_address() {
 	done
 }
 
+# Checks if a VM has already been defined and is known to libvirt. If not,
+# looks for a valid XML config file for such VM (within some directories),
+# and defines it if it finds one.
+# Parameters: <vm_name> <dir_1> [dir_2] ...
+function libvirt::vm_define_if_missing() {
+	if [[ -z "${1:-}" ]]; then
+		echo "ERROR: libvirt::vm_define_if_missing requires a VM name." >&2
+		return "${SHELLPACK_ERROR}"
+	fi
+
+	local vm="${1}"
+	shift
+	local dirs=("$@")
+
+	if libvirt::vm_is_defined "${vm}" ; then
+		# If the VM exists already, we're done!
+		return "${SHELLPACK_SUCCESS}"
+	fi
+
+	echo "${vm} not found: looking for a suitable XML config file..."
+
+	local dir xml_file match_found="false"
+
+	# For iterating through files
+	local shopt_save
+	shopt_save=$(shopt -p nullglob) || true
+	shopt -s nullglob nocaseglob
+
+	for dir in "${dirs[@]}"; do
+		if [[ ! -d "${dir}" ]]; then continue; fi
+
+		for xml_file in "${dir}"/*.xml; do
+			# We only care about valid libvirt VM config files.
+			if ! virt-xml-validate "${xml_file}" >/dev/null 2>&1; then
+				continue
+			fi
+
+			local xml_name
+			xml_name=$(xmllint --xpath 'string(//domain/name)' "${xml_file}" 2>/dev/null || true)
+
+			if [[ "${xml_name}" == "${vm}" ]]; then
+				echo "Match found! Defining ${vm} using ${xml_file}"
+				if virsh define "${xml_file}" >/dev/null; then
+					match_found="true"
+					break 2 # Esce da entrambi i cicli (file e directory)
+				else
+					echo "ERROR: Failed to define ${vm} from ${xml_file}" >&2
+					eval "${shopt_save}"
+					return "${SHELLPACK_ERROR}"
+				fi
+			fi
+		done
+	done
+
+	eval "${shopt_save}"
+
+	if [[ "${match_found}" == "false" ]]; then
+		echo "ERROR: ${vm} not defined, and no suitable XML config file found." >&2
+		return "${SHELLPACK_ERROR}"
+	fi
+
+	return "${SHELLPACK_SUCCESS}"
+}
+
 # Start one or more VMs via libvirt (virsh). The names of the VMs (as libvirt
 # knows them) are the parameters.
 function libvirt::vm_start() {
@@ -154,6 +230,11 @@ function libvirt::vm_start() {
 
 	local vm
 	for vm in "${vms[@]}"; do
+		if ! libvirt::vm_is_defined "${vm}"; then
+			echo "ERROR: Cannot start ${vm} as it is not defined in libvirt." >&2
+			return "${SHELLPACK_ERROR}"
+		fi
+
 		if libvirt::vm_is_running "${vm}" ; then
 			echo "${vm} already running according to virsh"
 			continue

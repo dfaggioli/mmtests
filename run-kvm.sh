@@ -21,6 +21,11 @@ function usage() {
 	echo "-M|--run-host-monitor       Force enable monitoring on the host."
 	echo "-N|--no-host-monitor        Force disable monitoring on the host."
 	echo "-C|--config-host CFG        Use CFG as config file for the host. Can be specified multiple times"
+	echo "-X|--vm-xml-dir DIR,[...]   Where to find the libvirt config files for VMs that"
+	echo "                            are not defined already. A comma-separated list of dirs"
+	echo "                            can be specified. The main MMTests directory is always checked."
+	echo "                            Note that the order of the directories matters, as we will"
+	echo "                            stop scanning as soon as the first suitable config file is found."
 	echo "--vm VMNAME[,VMNAME]        Name(s) of existing, and already known to 'virsh', VM(s)."
 	echo "                            If not specified, use \${MARVIN_KVM_DOMAIN} as VM name."
 	echo "                            If that is not defined, use 'marvin-mmtests'."
@@ -59,6 +64,7 @@ function should_sync_host_and_guests() {
 function parse_args() {
 	declare -ga RUN_ARGS=()
 	declare -ga CONFIGS=()
+	declare -ga VM_XML_DIRS=()
 
 	# Default values
 	force_host_performance="no"
@@ -107,6 +113,15 @@ function parse_args() {
 					exit "${SHELLPACK_ERROR}"
 				fi
 				vms_from_cli="${2}"
+				shift 2
+				;;
+			-X|--vm-xml-dir)
+				if [[ -z "${2:-}" ]]; then
+					echo "ERROR: ${1} requires at least one directory as an argument." >&2
+					usage
+					exit "${SHELLPACK_ERROR}"
+				fi
+				IFS=',' read -r -a VM_XML_DIRS <<< "${2}"
 				shift 2
 				;;
 			-h|-H|--help)
@@ -204,6 +219,16 @@ function parse_config() {
 		unset MONITORS_TRACER
 		unset MONITORS_ALWAYS
 	fi
+
+	# Merge the paths of the VM config files coming from the command
+	# line and from the host config file.
+	if [[ -n "${MMTESTS_VMS_XML_DIR:-}" ]]; then
+		local -a cfg_dirs
+		IFS=',' read -r -a cfg_dirs <<< "${MMTESTS_VMS_XML_DIR}"
+		VM_XML_DIRS+=("${cfg_dirs[@]}")
+	fi
+	# The script base directory always acts as the final fallback
+	VM_XML_DIRS+=("${SCRIPTDIR}")
 
 	# Command line has priority. However, if there wasn't any `--vm` param, check
 	# if we have a list of VMs to use in the config files. If there's nothing
@@ -369,6 +394,12 @@ function prepare_and_start_vms() {
 	else
 		echo "Booting the VM(s)"
 		activity_log "run-kvm: Booting VMs"
+
+		# Let's make sure VMs are actually there. Define them ourselves
+		# if they're not.
+		for v in "${!VMS[@]}"; do
+			libvirt::vm_define_if_missing "${VMS[v]}" "${VM_XML_DIRS[@]}" || die "Failed to define VM: ${VMS[v]}"
+		done
 
 		# LEGACY: booting the current host kernel in VMs is, currently, only
 		# supported if we are running inside Marvin, and with only one VM.
