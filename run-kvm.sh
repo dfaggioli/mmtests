@@ -740,7 +740,7 @@ function stop_vms() {
 	else
 		echo "Shutting down the VM(s)"
 		activity_log "run-kvm: Shutoff VMs"
-		kvm-stop --vm "$(IFS=,; echo "${VMS[*]}")"
+		libvirt::vm_stop "${VMS[@]}" || echo "WARNING: Failed to cleanly stop all VMs" >&2
 		teststate_log "VMs down :: $(date +%s)"
 	fi
 }

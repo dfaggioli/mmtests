@@ -8,6 +8,7 @@
 : "${SHELLPACK_FAILURE:=-1}"
 
 default_timeout=600
+default_shutdown_timeout=30
 
 # Start one or more VMs via libvirt (virsh). The names of the VMs (as libvirt
 # knows them) are the parameters.
@@ -62,6 +63,50 @@ function libvirt::vm_start() {
 			echo "ERROR: cannot find ${vm}'s IP address" >&2
 			return "${SHELLPACK_ERROR}"
 		fi
+	done
+
+	return "${SHELLPACK_SUCCESS}"
+}
+
+# Stop one or more VMs via libvirt (virsh). The names of the VMs (as libvirt
+# knows them) are the parameters.
+function libvirt::vm_stop() {
+	local vms=("$@")
+
+	if (( ${#vms[@]} == 0 )); then
+		vms=( "${MARVIN_KVM_DOMAIN:-marvin-mmtests}" )
+	fi
+
+	local vm
+	for vm in "${vms[@]}"; do
+		if ! kvm-check-running "${vm}" >/dev/null 2>&1; then
+			echo "Not stopping ${vm} as it is not running..."
+			continue
+		fi
+		
+		echo "Shutting down ${vm}"
+		virsh shutdown "${vm}" >/dev/null 2>&1 || true
+	done
+
+	for vm in "${vms[@]}"; do
+		if ! kvm-check-running "${vm}" >/dev/null 2>&1; then
+			continue
+		fi
+
+		local duration=0
+		echo -n "Waiting on ${vm} shutdown to complete"
+		while kvm-check-running "${vm}" >/dev/null 2>&1; do
+			echo -n "."
+			sleep 5
+			(( duration += 5 ))
+
+			if (( duration > default_shutdown_timeout )); then
+				echo -e "\nWARNING: Normal ${vm} shutdown exceeded, destroying"
+				virsh destroy "${vm}" >/dev/null 2>&1 || true
+				duration=0
+			fi
+		done
+		echo ""
 	done
 
 	return "${SHELLPACK_SUCCESS}"
