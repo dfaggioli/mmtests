@@ -387,7 +387,7 @@ function prepare_and_start_vms() {
 		do
 			VM_RUNNAME[v]="${RUNNAME}-${VMS[v]}"
 
-			GUEST_IP[v]=$(kvm-ip-address --vm "${VMS[v]}")
+			GUEST_IP[v]=$(libvirt::vm_ip_address "${VMS[v]}");
 
 			if [[ "${host_logs}" == "yes" ]]; then
 				virsh dumpxml ${VMS[v]} > "${SHELLPACK_LOG}/${VMS[v]}".xml

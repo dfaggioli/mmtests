@@ -12,72 +12,41 @@
 # first parameter and timeout the second.
 #
 # Mel Gorman <mgorman@suse.com> 2016
+# Dario Faggioli <dfaggioli@suse.com> 2026
 
-if [ "${MARVIN_KVM_DOMAIN}" = "" ]; then
-	export MARVIN_KVM_DOMAIN="marvin-mmtests"
+#!/bin/bash
+# shellcheck enable=require-variable-braces
+
+set -euo pipefail
+
+basedir="$(dirname "${0}")"
+SCRIPTDIR="${SCRIPTDIR:-$(cd "${basedir}/.." && pwd)}"
+
+# shellcheck source=shellpacks/common.sh
+source "${SCRIPTDIR}/shellpacks/common.sh"
+# shellcheck source=shellpacks/virt.sh
+source "${SCRIPTDIR}/shellpacks/virt.sh"
+
+: "${MARVIN_KVM_DOMAIN:=marvin-mmtests}"
+
+vm_name="${MARVIN_KVM_DOMAIN}"
+timeout=""
+
+# Legacy CLI parsing: handle optional --vm flag
+if [[ "${1:-}" == "--vm" ]]; then
+	if [[ -z "${2:-}" ]]; then
+		echo "ERROR: --vm requires a VM name." >&2
+		exit "${SHELLPACK_ERROR:--1}"
+	fi
+	vm_name="${2}"
+	shift 2
 fi
 
-if [ "$1" = "--vm" ]; then
-	shift
-	VM="$1"
-	shift
-else
-	VM=${MARVIN_KVM_DOMAIN}
+# If a parameter is still present after potential shifts, it is the timeout
+if [[ -n "${1:-}" ]]; then
+	timeout="${1}"
 fi
 
-GUEST_IP=
-TIMEOUT=$1
-STARTTIME=$(date +%s)
-
-lookup_state() {
-	local _ip=$1
-	local _state="REACHABLE"
-
-	if [ "$(which ip 2> /dev/null)" != "" ]; then
-		_state=$(ip n show | grep ^"${_ip}" | awk '{print $NF}')
-	fi
-	echo "${_state}"
-}
-
-while [ "${GUEST_IP}" = "" ]; do
-	if [ "${TIMEOUT}" != "" ]; then
-		CURRENTTIME="$(date +%s)"
-		RUNNING=$((CURRENTTIME-STARTTIME))
-		if [ ${RUNNING} -gt "${TIMEOUT}" ]; then
-			echo "ERROR: Timeout exceeded for discovering ${VM} IP address" >&2
-			exit -1
-		fi
-	fi
-
-	if [ "$(virsh dumpxml "${VM}" | grep "mac addres")" = "" ]; then
-		sleep 10
-		continue
-	fi
-
-	# There could be more than one NIC in the VM
-	for MAC_ADDRESS in $(virsh dumpxml "${VM}" | grep "mac address" | sed "s/.*'\(.*\)'.*/\1/g"); do
-		if [ "$(which arp 2> /dev/null)" != "" ]; then
-			GUEST_IP=$(arp -an | grep "${MAC_ADDRESS}" | awk '{ gsub(/[\(\)]/,"",$2); print $2 }')
-		else
-			GUEST_IP=$(ip n show | grep "${MAC_ADDRESS}" | awk '{print $1}')
-		fi
-
-		# We may have got more than one address. Go over the list and
-		# pick the first that answers to a ping.
-		for IP in ${GUEST_IP} ; do
-			if ping -c 1 -q "${IP}" &> /dev/null ; then
-				while [ "$(lookup_state "${IP}")" != "REACHABLE" ]; do
-					sleep 1
-				done
-				echo "${IP}"
-				exit 0
-			fi
-		done
-	done
-
-	if [ "${GUEST_IP}" = "" ]; then
-		sleep 10
-	fi
-done
-
-exit -1
+libvirt::vm_ip_address "${vm_name}" "${timeout}"
+# Propagate the exact exit code from the library function
+exit $?
