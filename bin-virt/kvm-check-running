@@ -1,20 +1,28 @@
 #!/bin/bash
 # shellcheck enable=require-variable-braces
 
-if [ "${MARVIN_KVM_DOMAIN}" = "" ]; then
-	export MARVIN_KVM_DOMAIN="marvin-mmtests"
-fi
+set -euo pipefail
 
-if [ "$1" = "--vm" ]; then
-	VM="$2"
+basedir="$(dirname "${0}")"
+includedir="$(cd "${basedir}/.." && pwd)"
+
+# shellcheck source=shellpacks/common.sh
+source "${includedir}/shellpacks/common.sh"
+# shellcheck source=shellpacks/virt.sh
+source "${includedir}/shellpacks/virt.sh"
+
+: "${MARVIN_KVM_DOMAIN:=marvin-mmtests}"
+
+vm_name="${MARVIN_KVM_DOMAIN}"
+
+if [[ "${1:-}" == "--vm" ]]; then
+	if [[ -z "${2:-}" ]]; then
+		echo "ERROR: --vm requires a VM name." >&2
+		exit "${SHELLPACK_ERROR:--1}"
+	fi
+	vm_name="${2}"
 	shift 2
-else
-	VM=${MARVIN_KVM_DOMAIN}
 fi
 
-STATE="$(virsh list --all | grep " marvin-mmtests"  | awk '{print $NF}')"
-if [ "${STATE}" = "running" ]; then
-	exit 0
-fi
-exit 1
-
+libvirt::vm_is_running "${vm_name}"
+exit $?
