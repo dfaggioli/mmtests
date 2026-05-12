@@ -142,6 +142,7 @@ function prologue() {
 	source "${SCRIPTDIR}/shellpacks/common-config.sh"
 	source "${SCRIPTDIR}/shellpacks/monitors.sh"
 	#set -euo pipefail
+	source "${SCRIPTDIR}/shellpacks/virt.sh"
 
 	export PATH="${SCRIPTDIR}/bin:${PATH}:${SCRIPTDIR}/bin-virt"
 
@@ -377,7 +378,7 @@ function prepare_and_start_vms() {
 			echo "Booting current kernel $(uname -r) ${MORE_BOOT_ARGS} on the guest"
 			kvm-boot $(uname -r) "${MORE_BOOT_ARGS}" || die "Failed to boot $(uname -r)"
 		else
-			kvm-start --vm "$(IFS=,; echo "${VMS[*]}")" || die "Failed to boot VM(s)"
+			libvirt::vm_start "${VMS[@]}" || die "Failed to boot VM(s)"
 		fi
 
 		teststate_log "VMs up :: $(date +%s)"
