@@ -360,7 +360,7 @@ function prepare_and_start_vms() {
 			VM_RUNNAME[v]="${RUNNAME}-${VMS[v]}"
 
 			echo -n "checking VM: ${VMS[v]} at IP: ${GUEST_IP[v]} ..."
-			wait_ssh_available "${GUEST_IP[v]}"
+			vm_wait_ssh_with_reset "${GUEST_IP[v]}"
 			echo "Ok!"
 
 			activity_log "run-kvm: VM ${VMS[v]} IP ${GUEST_IP[v]}"

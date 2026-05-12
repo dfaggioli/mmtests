@@ -10,6 +10,31 @@
 default_timeout=600
 default_shutdown_timeout=30
 
+# Waits until a machine is running and available over SSH.
+# Parameters: <VM_IP> [timeout_sec] [poll_intervall_sec]
+function vm_wait_ssh() {
+	if [[ -z "${1:-}" ]]; then
+		echo "ERROR: vm_wait_ssh requires a target IP/hostname as the first argument." >&2
+		return "${SHELLPACK_ERROR}"
+	fi
+
+	local target="${1}"
+	local timeout="${2:-${default_timeout}}"
+	local interval="${3:-10}"
+	local elapsed=0
+
+	while (( elapsed < timeout )); do
+		# BatchMode disables interactive pronts (i.e., we don't need expect scripts).
+		if ssh -q "${MMTESTS_SSH_OPTIONS:-}" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 "root@${target}" echo "marvin-ping" >/dev/null 2>&1; then
+			return "${SHELLPACK_SUCCESS}"
+		fi
+		sleep "${interval}"
+		(( elapsed += interval ))
+	done
+
+	return "${SHELLPACK_ERROR}"
+}
+
 # Accepts the VM name as parameter (fallback to MARVIN_KVM_DOMAIN or
 # its default, if none is provided).
 function libvirt::vm_is_running() {
@@ -162,7 +187,7 @@ function libvirt::vm_start() {
 		echo "Waiting on ${vm} IP"
 
 		if guest_ip=$(libvirt::vm_ip_address "${vm}" 600); then
-			if ! wait_ssh_available "${guest_ip}"; then
+			if ! vm_wait_ssh "${guest_ip}"; then
 				echo "ERROR: ${vm} not reacheable via SSH" >&2
 				return "${SHELLPACK_ERROR}"
 			fi
@@ -217,4 +242,49 @@ function libvirt::vm_stop() {
 	done
 
 	return "${SHELLPACK_SUCCESS}"
+}
+
+# Legacy orchestrator: performs infinite polling with a threshold-based hard-reset policy.
+# Parameters: <VM_IP_or_hostname> [reset_mode]
+function vm_wait_ssh_with_reset() {
+	if [[ -z "${1:-}" ]]; then
+		echo "ERROR: vm_wait_ssh_with_reset requires a target IP/hostname as the first argument." >&2
+		return "${SHELLPACK_ERROR}"
+	fi
+
+	local target="${1}"
+	local reset_mode="${2:-}"
+	local count=0
+
+	if [[ "${reset_mode}" != "quiet" ]]; then
+		echo -n "Waiting for ssh to be available at ${target}:22"
+		[[ "${reset_mode}" == "reset" ]] && echo -n " with reset"
+		echo ""
+	fi
+
+	while true; do
+		# Deleghiamo il check alla funzione core (timeout 30s, check ogni 10s)
+		if vm_wait_ssh "${target}" 30 10; then
+			return "${SHELLPACK_SUCCESS}"
+		fi
+
+		(( count++ )) || true
+
+		if [[ "${reset_mode}" != "quiet" ]]; then
+			echo -n "."
+		fi
+
+		if (( count >= 400 && count % 50 == 0 )); then
+			if [[ "${reset_mode}" == "reset" ]]; then
+				echo -e "\nPower resetting ${target}"
+				power-ctrl -s "${target}" off
+				sleep 30
+				power-ctrl -s "${target}" on
+			elif [[ "${reset_mode}" == "kvm-start" ]]; then
+				echo -e "\nAttempting kvm-start"
+				# NOTE: This only works if we're running in Marvin!
+				libvirt::vm_start || true
+			fi
+		fi
+	done
 }

@@ -3,71 +3,36 @@
 #
 # Waits until a particular machine is running ssh and is available
 # Author: Mel Gorman <mgorman@suse.de>
-# Copyright: SUSE Labs 2013
+# Author: Dario Faggioli <dfaggioli@suse.com>
+# Copyright: SUSE Labs 2026
 
-EXPECT_SCRIPT=
-function cleanup() {
-	if [ "${EXPECT_SCRIPT}" != "" ]; then
-		rm -f "${EXPECT_SCRIPT}"
-	fi
-}
-trap cleanup EXIT
+set -euo pipefail
 
-if [ "$1" = "" ]; then
-	echo Specify a host
-	exit -1
-fi
-MACHINE=$1
-RESET=$2
+basedir="$(dirname "${0}")"
+SCRIPTDIR="${SCRIPTDIR:-$(cd "${basedir}/.." && pwd)}"
 
-EXPECT_SCRIPT="$(mktemp)"
-cat > "${EXPECT_SCRIPT}" <<EOF
-spawn ssh -o PubkeyAuthentication=no root@${MACHINE} echo marvin-ping
-expect {
-	marvin-ping		{ exit   1 }
-	"assword"		{ exit   1 }
-        "continue connecting"   { exp_send yes\\r; exp_continue }
-}
-EOF
+# shellcheck source=shellpacks/common.sh
+source "${SCRIPTDIR}/shellpacks/common.sh"
+# shellcheck source=shellpacks/virt.sh
+source "${SCRIPTDIR}/shellpacks/virt.sh"
 
-expect -f "${EXPECT_SCRIPT}" 2>&1 > /dev/null
-RET=$?
-if [ ${RET} -eq 1 ]; then
-	rm "${EXPECT_SCRIPT}"
-	exit ${RET}
+if [[ -z "${1:-}" ]]; then
+	echo "Specify a host" >&2
+	exit "${SHELLPACK_ERROR:--1}"
 fi
 
-COUNT=0
+machine="${1}"
+reset_mode="${2:-}"
 
-if [ "${RESET}" != "quiet" ]; then
-	echo -n "Waiting for ssh to be available at ${MACHINE}:22"
-	if [ "${RESET}" = "reset" ]; then
-		echo -n " with reset"
-	fi
+# Eseguiamo la logica con reset integrato
+if vm_wait_ssh_with_reset "${machine}" "${reset_mode}"; then
+
+	# NOTE: we need to invert the return value, for backward
+	# compatibility with the previous version of the
+	# wait_ssh_available script.
+	echo ""
+	exit 1
+else
+	echo ""
+	exit "${SHELLPACK_ERROR:--1}"
 fi
-while [ "${RET}" -ne 1 ]; do
-        expect -f "${EXPECT_SCRIPT}" 2>&1 > /dev/null
-        RET=$?
-	if [ "${RESET}" != "quiet" ]; then
-        	echo -n .
-	fi
-        sleep 30
-	COUNT=$((COUNT+1))
-	if [ ${COUNT} -ge 400 -a $((COUNT%50)) -eq 0 ]; then
-		if [ "${RESET}" = "reset" ]; then
-			echo
-			echo Power resetting
-			power-ctrl -s "${MACHINE}" off
-			sleep 30
-			power-ctrl -s "${MACHINE}" on
-		fi
-		if [ "${RESET}" = "kvm-start" ]; then
-			echo
-			echo Attempting kvm-start
-			kvm-start
-		fi
-	fi
-done
-rm "${EXPECT_SCRIPT}"
-echo
-exit "${RET}"
