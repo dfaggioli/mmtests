@@ -532,6 +532,14 @@ function deploy_mmtests() {
 	# Ensure automatic package installation flag is set
 	parallel -j "${vmcount}" ssh ${MMTESTS_SSH_OPTIONS} {} "'touch ~/.mmtests-auto-package-install'" ::: "${TARGET_HOSTS[@]}" || die "Failed to set auto-package install flag"
 
+	# Generate the variants of the config files for the benchmarks inside the guests
+	parallel -j "${vmcount}" ssh ${MMTESTS_SSH_OPTIONS} {} "'cd git-private/${NAME} && ./bin/autogen-configs'" ::: "${TARGET_HOSTS[@]}" || die "Failed to generate MMTests config files on guests"
+
+	# Update build flags if requested by the host configuration
+	if [[ "${MMTESTS_UPDATE_BUILD_FLAGS:-}" == "yes" ]]; then
+		parallel -j "${vmcount}" ssh ${MMTESTS_SSH_OPTIONS} {} "'cd git-private/${NAME} && ./bin/update-build-flags.sh'" ::: "${TARGET_HOSTS[@]}" || die "Failed to update build flags on guests"
+	fi
+
 	cd "${NAME}"
 }
 

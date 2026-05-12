@@ -15,6 +15,8 @@ if [ "$MMTESTS_BUILD_COLLECTION" = "" ]; then
 	die "MMTESTS_BUILD_COLLECTION must be specified in shellpacks/common-config.sh"
 fi
 
+${SCRIPTDIR}/bin/install-depends git wget
+
 cd $SCRIPTDIR
 if [ ! -e configs/build-flags ]; then
 	git clone $MMTESTS_BUILD_COLLECTION configs/build-flags || \
