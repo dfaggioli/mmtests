@@ -218,6 +218,57 @@ function libvirt::vm_define_if_missing() {
 	return "${SHELLPACK_SUCCESS}"
 }
 
+# Forcefully undefines a VM. If the VM is running, it stops it first.
+# Handles retry loops for transient locks and NVRAM/Storage cleanup.
+# Parameters: <vm_name> [remove_storage_flag (yes/no)]
+function libvirt::vm_undefine() {
+	if [[ -z "${1:-}" ]]; then
+		echo "ERROR: libvirt::vm_undefine requires a VM name." >&2
+		return "${SHELLPACK_ERROR}"
+	fi
+
+	local vm="${1}"
+	local remove_storage="${2:-no}"
+
+	if ! libvirt::vm_is_defined "${vm}"; then
+		# The VM does not exist, nothing to do
+		return "${SHELLPACK_SUCCESS}"
+	fi
+
+	if libvirt::vm_is_running "${vm}"; then
+		echo "VM ${vm} is running. Stopping it before undefine..."
+		libvirt::vm_stop "${vm}" || return "${SHELLPACK_ERROR}"
+	fi
+
+	local -a undef_opts=()
+	if [[ "${remove_storage}" == "yes" ]]; then
+		undef_opts+=("--remove-all-storage")
+	fi
+
+	local attempt
+	for attempt in {1..3}; do
+		echo "Undefining VM: ${vm} (attempt ${attempt}/3)"
+		
+		# Attempt 1: with NVRAM cleanup (required for UEFI VMs)
+		# Attempt 2: standard (fallback if libvirt doesn't support --nvram or it's a BIOS VM)
+		if virsh undefine "${vm}" "${undef_opts[@]}" --nvram >/dev/null 2>&1 || \
+		   virsh undefine "${vm}" "${undef_opts[@]}" >/dev/null 2>&1; then
+			
+			# Libvirt might report success but the VM could still
+			# exist as transient. Verify that it is actually gone.
+			if ! libvirt::vm_is_defined "${vm}"; then
+				echo "${vm} successfully undefined."
+				return "${SHELLPACK_SUCCESS}"
+			fi
+		fi
+		
+		sleep 2
+	done
+
+	echo "ERROR: Failed to undefine ${vm} after 3 attempts." >&2
+	return "${SHELLPACK_ERROR}"
+}
+
 # Start one or more VMs via libvirt (virsh). The names of the VMs (as libvirt
 # knows them) are the parameters.
 function libvirt::vm_start() {
