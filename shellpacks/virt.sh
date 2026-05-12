@@ -10,6 +10,23 @@
 default_timeout=600
 default_shutdown_timeout=30
 
+# Accepts the VM name as parameter (fallback to MARVIN_KVM_DOMAIN or
+# its default, if none is provided).
+function libvirt::vm_is_running() {
+	local vm="${1:-${MARVIN_KVM_DOMAIN:-marvin-mmtests}}"
+	local state
+
+	if ! state=$(virsh domstate "${vm}" 2>/dev/null); then
+		return "${SHELLPACK_ERROR}"
+	fi
+
+	if [[ "${state}" == "running" ]]; then
+		return "${SHELLPACK_SUCCESS}"
+	fi
+
+	return "${SHELLPACK_ERROR}"
+}
+
 # Obtains the IP address of a VM, given the name of the VM (as it is known
 # to libvirt).
 function libvirt::vm_ip_address() {
@@ -112,7 +129,7 @@ function libvirt::vm_start() {
 
 	local vm
 	for vm in "${vms[@]}"; do
-		if kvm-check-running "${vm}" >/dev/null 2>&1; then
+		if libvirt::vm_is_running "${vm}" ; then
 			echo "${vm} already running according to virsh"
 			continue
 		fi
@@ -127,7 +144,7 @@ function libvirt::vm_start() {
 		virsh start "${vm}"
 		start_time=$(date +%s)
 
-		while ! kvm-check-running "${vm}" >/dev/null 2>&1; do
+		while ! libvirt::vm_is_running "${vm}" ; do
 			current_time=$(date +%s)
 			running=$(( current_time - start_time ))
 			if (( running > timeout )); then
@@ -169,7 +186,7 @@ function libvirt::vm_stop() {
 
 	local vm
 	for vm in "${vms[@]}"; do
-		if ! kvm-check-running "${vm}" >/dev/null 2>&1; then
+		if ! libvirt::vm_is_running "${vm}" ; then
 			echo "Not stopping ${vm} as it is not running..."
 			continue
 		fi
@@ -179,13 +196,13 @@ function libvirt::vm_stop() {
 	done
 
 	for vm in "${vms[@]}"; do
-		if ! kvm-check-running "${vm}" >/dev/null 2>&1; then
+		if ! libvirt::vm_is_running "${vm}" ; then
 			continue
 		fi
 
 		local duration=0
 		echo -n "Waiting on ${vm} shutdown to complete"
-		while kvm-check-running "${vm}" >/dev/null 2>&1; do
+		while libvirt::vm_is_running "${vm}" ; do
 			echo -n "."
 			sleep 5
 			(( duration += 5 ))
