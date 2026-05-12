@@ -398,6 +398,12 @@ function prepare_and_start_vms() {
 		# Let's make sure VMs are actually there. Define them ourselves
 		# if they're not.
 		for v in "${!VMS[@]}"; do
+			# Undefine already existing VMs, if we're being told so
+			if [[ "${MMTESTS_VMS_UNDEF_BEFORE_START:-}" == "yes" ]]; then
+				local rm_storage="${MMTESTS_VMS_UNDEF_REMOVE_STORAGE:-no}"
+				libvirt::vm_undefine "${VMS[v]}" "${rm_storage}" || die "Failed to forcefully undefine VM: ${VMS[v]}"
+			fi
+
 			libvirt::vm_define_if_missing "${VMS[v]}" "${VM_XML_DIRS[@]}" || die "Failed to define VM: ${VMS[v]}"
 		done
 
