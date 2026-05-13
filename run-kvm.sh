@@ -65,6 +65,7 @@ function parse_args() {
 	declare -ga RUN_ARGS=()
 	declare -ga CONFIGS=()
 	declare -ga VM_XML_DIRS=()
+	declare -ga VM_AYAST_DIRS=()
 
 	# Default values
 	force_host_performance="no"
@@ -122,6 +123,15 @@ function parse_args() {
 					exit "${SHELLPACK_ERROR}"
 				fi
 				IFS=',' read -r -a VM_XML_DIRS <<< "${2}"
+				shift 2
+				;;
+			-A|--vm-autoyast-dir)
+				if [[ -z "${2:-}" ]]; then
+					echo "ERROR: ${1} requires at least one directory as an argument." >&2
+					usage
+					exit "${SHELLPACK_ERROR}"
+				fi
+				IFS=',' read -r -a VM_AYAST_DIRS <<< "${2}"
 				shift 2
 				;;
 			-h|-H|--help)
@@ -207,6 +217,23 @@ function parse_config() {
 		CONFIGS=( "${default_host_config}" )
 	fi
 
+	# A way of specifying various VM properties (namely, for automatic
+	# deployment) is through associative arrays (e.g., VM_CPUS["vm1"]=4).
+	# Let's define the ones that we support here, so the users don't need
+	# to remember of clobbering their host config files with these lines.
+	declare -gA VM_CPUS=()
+	declare -gA VM_MEMORY=()
+	declare -gA VM_DISK_POOL=()
+	declare -gA VM_DISK_SPEC=()
+	declare -gA VM_DISK_FILE_SIZE=()
+	declare -gA VM_IMPORT_DISK_FILE=()
+	declare -gA VM_COPY_DISK_FILE=()
+	declare -gA VM_COPY_DISK_COW=()
+	declare -gA VM_COPY_DISK_DEST_PATH=()
+	declare -gA VM_DEPLOY_DISTRO=()
+	declare -gA VM_INSTALL_LOCATION=()
+	declare -gA VM_AUTOYAST=()
+
 	import_configs
 
 	# If we don't collect host logs, we cannot run any monitor, not even
@@ -229,6 +256,17 @@ function parse_config() {
 	fi
 	# The script base directory always acts as the final fallback
 	VM_XML_DIRS+=("${SCRIPTDIR}")
+
+	# Same as with the xml config file, prepare the paths in where
+	# the automatic deployment functions will look for autoyast profiles.
+	# And for them as well, the base directory is always considered.
+	if [[ -n "${MMTESTS_VMS_AUTOYAST_DIR:-}" ]]; then
+		local -a ay_dirs
+		IFS=',' read -r -a ay_dirs <<< "${MMTESTS_VMS_AUTOYAST_DIR}"
+		VM_AYAST_DIRS+=("${ay_dirs[@]}")
+	fi
+	[[ -d "${SCRIPTDIR}/autoyast" ]] && VM_AYAST_DIRS+=("${SCRIPTDIR}/autoyast")
+	VM_AYAST_DIRS+=("${SCRIPTDIR}")
 
 	# Command line has priority. However, if there wasn't any `--vm` param, check
 	# if we have a list of VMs to use in the config files. If there's nothing
@@ -397,6 +435,7 @@ function prepare_and_start_vms() {
 
 		# Let's make sure VMs are actually there. Define them ourselves
 		# if they're not.
+		local -a deploying_vms=()
 		for v in "${!VMS[@]}"; do
 			# Undefine already existing VMs, if we're being told so
 			if [[ "${MMTESTS_VMS_UNDEF_BEFORE_START:-}" == "yes" ]]; then
@@ -405,6 +444,17 @@ function prepare_and_start_vms() {
 			fi
 
 			libvirt::vm_define_if_missing "${VMS[v]}" "${VM_XML_DIRS[@]}" || die "Failed to define VM: ${VMS[v]}"
+
+			 # If the VM is still missing, start (async) deployment.
+			if ! libvirt::vm_is_defined "${VMS[v]}"; then
+				libvirt::vm_deploy_start "${VMS[v]}" "${VM_AYAST_DIRS[@]}" || die "Failed to trigger deploy for VM: ${VMS[v]}"
+				deploying_vms+=("${VMS[v]}")
+			fi
+		done
+
+		# Sync barrier for the VMs that are being created and installed.
+		for vm in "${deploying_vms[@]}"; do
+			libvirt::vm_deploy_wait "${vm}" || die "Deployment failed for VM: ${vm}"
 		done
 
 		# LEGACY: booting the current host kernel in VMs is, currently, only
