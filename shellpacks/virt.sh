@@ -376,6 +376,344 @@ function libvirt::vm_stop() {
 	return "${SHELLPACK_SUCCESS}"
 }
 
+# Checks if a libvirt storage pool exists and is active
+function libvirt::_check_disk_pool() {
+	local pool="${1}"
+	virsh pool-info "${pool}" >/dev/null 2>&1
+}
+
+# Formally verifies if a file is a valid AutoYaST profile.
+# Prints the effective file path to stdout if valid.
+function libvirt::_check_autoyast() {
+	local ay_file="${1}"
+
+	# Fallback to .erb extension if the base file is missing
+	if [[ ! -f "${ay_file}" ]] && [[ -f "${ay_file}.erb" ]]; then
+		ay_file="${ay_file}.erb"
+	fi
+
+	if [[ -f "${ay_file}" ]]; then
+		# Validate SuSE XML signature using file(1) and head+grep
+		if file "${ay_file}" | grep -q 'ASCII text' && \
+		   head -n 1 "${ay_file}" | grep -q '^<profile.*http://www.suse.com/.*/configns'; then
+			echo "${ay_file}"
+			return 0
+		fi
+	fi
+
+	return 1
+}
+
+# Dynamically retrieves a VM configuration property.
+# Resolution order:
+# 1. Associative array (e.g., VM_CPUS["opensuse-leap.1"]) -> Safe for all chars
+# 2. Standard variable (e.g., vm1_CPUS) -> Evaluated ONLY if VM name is POSIX-compliant
+# 3. Global default (e.g., MMTESTS_VMS_CPUS)
+# Prints the property to the stdout (if a valid one is found).
+# Parameters: <vm_name> <property_suffix>
+function libvirt::_get_vm_prop() {
+	local vm="${1}"
+	local prop="${2}"
+	local val=""
+
+	# 1. Associative array check
+	local assoc_ref="VM_${prop}[\"${vm}\"]"
+	val="${!assoc_ref:-}"
+	if [[ -n "${val}" ]]; then
+		echo "${val}"
+		return 0
+	fi
+
+	# 2. Standard variable check
+	# Evaluate indirect expansion ONLY if the VM name is a valid Bash
+	# identifier (e.g., "opensuse-leap" is not, due to the "-").
+	if [[ "${vm}" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+		local var_ref="${vm}_${prop}"
+		val="${!var_ref:-}"
+		if [[ -n "${val}" ]]; then
+			echo "${val}"
+			return 0
+		fi
+	fi
+
+	# 3. Fallback to global default
+	local global_ref="MMTESTS_VMS_${prop}"
+	val="${!global_ref:-}"
+
+	echo "${val}"
+}
+
+# Triggers the background deployment of a VM with virt-install. If there's
+# the need to deploy multiple VMs, this function can be called for all of them,
+# so installation can happen in parallel.
+# Parameters: <vm_name> [autoyast_dir_1] [autoyast_dir_2] ...
+function libvirt::vm_deploy_start() {
+	if [[ -z "${1:-}" ]]; then
+		echo "ERROR: libvirt::vm_deploy_start requires a VM name." >&2
+		return "${SHELLPACK_ERROR}"
+	fi
+
+	local vm="${1:-}"
+	shift
+	local ayast_dirs=("$@")
+
+	echo "Initiating deployment for missing VM: ${vm}..."
+
+	# Let's try to figure out (from the host config file) the hardware
+
+	# For a VM called "vm1", we check (in this order) if we have:
+	# - VM_MEMORY["vm1"]=<...>
+	# - vm1_MEMORY=<...>
+	# - MMTESTS_VMS_MEMORY
+	# If none of the above exists, we try to compute some kind of
+	# default value (suitable for running only one, pretty big, VM).
+	local memory
+	memory=$(libvirt::_get_vm_prop "${vm}" "MEMORY")
+	if [[ -z "${memory}" ]]; then
+		local memtotal
+		memtotal=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+		memory=$((memtotal * 4 / 5 / 1024))
+	fi
+
+	# Pretty much the same as what we do above for memory.
+	local cpus
+	cpus=$(libvirt::_get_vm_prop "${vm}" "CPUS")
+	if [[ -z "${cpus}" ]]; then
+		cpus=$(nproc --all)
+		local nr_spare
+		nr_spare=$(numactl --hardware 2>/dev/null | grep -c cpus: || echo 1)
+		nr_spare=$((nr_spare * 2))
+		# Default here is: same number of CPUs as the host, minus
+		# 2 CPUs per NUMA node.
+		if (( cpus > nr_spare * 2 )); then
+			cpus=$((cpus - nr_spare))
+		fi
+	fi
+
+	# NOTE: Libvirt is now able to deal with this automatically, but that
+	# depends on the version of Libvirt we have on the host. For now, let's
+	# just set it explicitly.
+	local -a iommu_opts=()
+	if (( cpus > 255 )); then
+		iommu_opts=("--iommu" "model=intel,driver.intremap=on,driver.eim=on" "--features" "ioapic.driver=qemu")
+	fi
+
+	# Let's figure out storage for the VM
+	local pool
+	pool=$(libvirt::_get_vm_prop "${vm}" "DISK_POOL")
+	pool="${pool:-default}"
+
+	local disk_spec="" is_import="false"
+	local import_disk copy_disk copy_cow
+	import_disk=$(libvirt::_get_vm_prop "${vm}" "IMPORT_DISK_FILE")
+	copy_disk=$(libvirt::_get_vm_prop "${vm}" "COPY_DISK_FILE")
+	copy_cow=$(libvirt::_get_vm_prop "${vm}" "COPY_DISK_COW")
+
+	if [[ -n "${import_disk}" && -n "${copy_disk}" ]]; then
+		echo "ERROR: Cannot both copy and import the same disk file for ${vm}" >&2
+		return "${SHELLPACK_ERROR}"
+	fi
+
+	if [[ "${copy_cow}" == "yes" && -z "${copy_disk}" ]]; then
+		echo "ERROR: Unknown backing disk file for COW for ${vm}" >&2
+		return "${SHELLPACK_ERROR}"
+	fi
+
+	# Importing means picking up an existing disk image and use it for the
+	# new VM. Such image can be used directly or copied to a new file.
+	if [[ -n "${import_disk}" || -n "${copy_disk}" ]]; then
+		is_import="true"
+		if [[ -n "${copy_disk}" ]]; then
+			install-depends qemu-tools
+
+			local copy_dest_path
+			copy_dest_path=$(libvirt::_get_vm_prop "${vm}" "COPY_DISK_DEST_PATH")
+			if [[ -z "${copy_dest_path}" ]]; then
+				if ! libvirt::_check_disk_pool "${pool}"; then
+					echo "ERROR: requested storage pool ${pool} for ${vm} is not available" >&2
+					return "${SHELLPACK_ERROR}"
+				fi
+				copy_dest_path=$(virsh pool-dumpxml "${pool}" | xmllint --xpath 'string(//path)' - 2>/dev/null || true)
+			fi
+
+			local copy_dest_file
+			local disk_format=""
+			copy_dest_file=$(mktemp "${copy_dest_path}/${vm}-XXXX.disk")
+			if [[ "${copy_cow}" == "yes" ]]; then
+				echo "Creating COW snapshot of ${copy_disk} at ${copy_dest_file}..."
+
+				# Create the overlay. A COW overlay must structurally be qcow2.
+				qemu-img create -f qcow2 -F qcow2 -b "${copy_disk}" "${copy_dest_file}" || return "${SHELLPACK_ERROR}"
+				disk_format=",format=qcow2"
+			else
+				echo "Copying disk ${copy_disk} to ${copy_dest_file}..."
+				cp -a "${copy_disk}" "${copy_dest_file}" || return "${SHELLPACK_ERROR}"
+
+				# Auto-discover original file format if qemu-img is available on the host
+				if command -v qemu-img >/dev/null 2>&1; then
+					local fmt
+					fmt=$(qemu-img info "${copy_disk}" 2>/dev/null | awk '/^file format:/ {print $3}' || true)
+					[[ -n "${fmt}" ]] && disk_format=",format=${fmt}"
+				fi
+			fi
+
+			# Append the detected or forced format to the virt-install specification
+			disk_spec="${copy_dest_file},bus=virtio,discard=unmap${disk_format}"
+		else
+			disk_spec="${import_disk},bus=virtio,discard=unmap"
+		fi
+	else
+		disk_spec=$(libvirt::_get_vm_prop "${vm}" "DISK_SPEC")
+		if [[ -z "${disk_spec}" ]]; then
+			local fsize
+			fsize=$(libvirt::_get_vm_prop "${vm}" "DISK_FILE_SIZE")
+			fsize="${fsize:-12}"
+			disk_spec="size=${fsize},pool=${pool},bus=virtio,discard=unmap"
+		fi
+		
+		# Extract pool from spec to validate it
+		pool=$(echo "${disk_spec}" | grep -o 'pool=[^,]*' | cut -d= -f2 || echo "default")
+		if ! libvirt::_check_disk_pool "${pool}"; then
+			echo "ERROR: requested storage pool ${pool} for ${vm} is not available" >&2
+			return "${SHELLPACK_ERROR}"
+		fi
+	fi
+
+	# Let's now start to put together the actual virt-install command
+	local serial_log="${SHELLPACK_LOG_BASE:-/tmp}/${vm}-serial.log"
+	rm -f "${serial_log}"
+
+	local -a virt_cmd=(
+		virt-install
+		--connect qemu:///system
+		--virt-type kvm
+		--machine q35
+		--name "${vm}"
+		--vcpus "${cpus}"
+		"${iommu_opts[@]}"
+		--memory "${memory}"
+		--disk "${disk_spec}"
+		--network network=default,model=virtio
+		--graphics none
+		--boot uefi
+		--serial "file,path=${serial_log}"
+		--console pty,target_type=serial
+		--noautoconsole
+	)
+
+	# If we're importing the VM, fine. If not, we need an automatic
+	# install "strategy", with all it takes (e.g., AutoYaST... for now!)
+	if [[ "${is_import}" == "true" ]]; then
+		virt_cmd+=("--import" "--osinfo" "detect=on,require=off")
+		# Signal the wait barrier (through a "filesystem marker"
+		# that no OS installation is actually taking place.
+		touch "${SHELLPACK_LOG_BASE:-/tmp}/${vm}-import.marker"
+	else
+		virt_cmd+=("--osinfo" "detect=on,require=off")
+
+		local distro
+		distro=$(libvirt::_get_vm_prop "${vm}" "DEPLOY_DISTRO")
+		[[ -z "${distro}" && -f ~/.marvin.deploy.distro ]] && distro=$(< ~/.marvin.deploy.distro)
+		[[ -z "${distro}" && -f ~/.mmtests.deploy.distro ]] && distro=$(< ~/.mmtests.deploy.distro)
+		[[ -z "${distro}" ]] && distro="openSUSE-Tumbleweed"
+
+		local location autoyast
+		location=$(libvirt::_get_vm_prop "${vm}" "INSTALL_LOCATION")
+		autoyast=$(libvirt::_get_vm_prop "${vm}" "AUTOYAST")
+
+		if [[ -z "${autoyast}" || ! -f "${autoyast}" ]]; then
+			local dir candidate
+			for dir in "${ayast_dirs[@]}"; do
+				[[ ! -d "${dir}" ]] && continue
+				
+				candidate=$(libvirt::_check_autoyast "${dir}/${autoyast}") ||
+				candidate=$(libvirt::_check_autoyast "${dir}/${vm}.xml") ||
+				candidate=$(libvirt::_check_autoyast "${dir}/${vm}_${distro}.xml") ||
+				candidate=$(libvirt::_check_autoyast "${dir}/${vm}_${distro}_autoyast.xml") ||
+				candidate=$(libvirt::_check_autoyast "${dir}/${vm}_autoyast.xml") ||
+				candidate=$(libvirt::_check_autoyast "${dir}/${distro}_autoyast.xml") ||
+				candidate=$(libvirt::_check_autoyast "${dir}/${distro}.xml") ||
+				candidate=$(libvirt::_check_autoyast "${dir}/autoyast.xml") || candidate=""
+
+				if [[ -n "${candidate}" ]]; then
+					autoyast="${candidate}"
+					break
+				fi
+			done
+		fi
+
+		if [[ -z "${location}" || -z "${autoyast}" ]]; then
+			local config_spec=""
+			if [[ -n "${MMTESTS_DEPLOY_DISTRO_SPEC:-}" ]]; then
+				config_spec=$(echo "${MMTESTS_DEPLOY_DISTRO_SPEC}" | awk -v d="${distro}@" '$0 ~ "^" d {print; exit}' || true)
+			fi
+			
+			if [[ -n "${config_spec}" ]]; then
+				local _ parsed_loc parsed_ay
+				IFS='@' read -r _ parsed_loc parsed_ay <<< "${config_spec}"
+				[[ -z "${location}" ]] && location="${parsed_loc}"
+				[[ -z "${autoyast}" ]] && autoyast=$(libvirt::_check_autoyast "${parsed_ay}" || echo "${parsed_ay}")
+			fi
+		fi
+
+		if [[ -z "${location}" || -z "${autoyast}" ]]; then
+			echo "ERROR: Install location or autoyast profile missing or invalid for ${vm}" >&2
+			return "${SHELLPACK_ERROR}"
+		fi
+
+		virt_cmd+=("--location" "${location}")
+
+		# The AutoYaST profile can be a local file or an URL. In the
+		# former case, we inject it into the VM's initrd image. In
+		# the latter, we'll try to download it.
+		if [[ -f "${autoyast}" ]]; then
+			virt_cmd+=("--initrd-inject" "${autoyast}")
+			virt_cmd+=("--extra-args" "network=1 install=${location} autoyast=file:///$(basename "${autoyast}") console=ttyS0,115200n8")
+			cp "${autoyast}" "${SHELLPACK_LOG_BASE:-/tmp}/${vm}-autoyast" || true
+		else
+			virt_cmd+=("--extra-args" "network=1 install=${location} autoyast=${autoyast} console=ttyS0,115200n8")
+		fi
+	fi
+
+	"${virt_cmd[@]}" || return "${SHELLPACK_ERROR}"
+	return "${SHELLPACK_SUCCESS}"
+}
+
+# Barrier Function: Waits for the OS deployment to finish by polling the serial log.
+# Consumes the import marker to bypass wait if applicable.
+# Parameters: <vm_name>
+function libvirt::vm_deploy_wait() {
+	local vm="${1:-}"
+	local marker="${SHELLPACK_LOG_BASE:-/tmp}/${vm}-import.marker"
+	local serial_log="${SHELLPACK_LOG_BASE:-/tmp}/${vm}-serial.log"
+
+	if [[ -f "${marker}" ]]; then
+		rm -f "${marker}"
+		echo "VM ${vm} imported successfully (no OS deployment wait required)."
+		libvirt::vm_stop "${vm}" || true
+		return "${SHELLPACK_SUCCESS}"
+	fi
+
+	echo "Waiting for OS deployment to complete on ${vm} (check ${serial_log} for details)..."
+	while true; do
+		if [[ -f "${serial_log}" ]] && grep -q " login:" "${serial_log}"; then
+			echo "Installation completed for ${vm}."
+			break
+		fi
+
+		if ! libvirt::vm_is_running "${vm}"; then
+			echo "ERROR: VM ${vm} stopped unexpectedly during deployment." >&2
+			return "${SHELLPACK_ERROR}"
+		fi
+		sleep 10
+	done
+
+	# Provisioning with virt-install typicall leaves the VM up. Shut it
+	# down, as the prosecution of the automatio expects it to be that.
+	libvirt::vm_stop "${vm}" || true
+	return "${SHELLPACK_SUCCESS}"
+}
+
 # Legacy orchestrator: performs infinite polling with a threshold-based hard-reset policy.
 # Parameters: <VM_IP_or_hostname> [reset_mode]
 function vm_wait_ssh_with_reset() {

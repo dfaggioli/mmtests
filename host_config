@@ -79,6 +79,78 @@
 #export MMTESTS_VMS_IP="192.168.122.24 192.168.122.38"
 #export MMTESTS_VMS="vm_a vm_b"
 
+# Install location, distribution and AutoYaST file, valid for all
+# VMs (unless a more specific entry is present below).
+#export MMTESTS_VMS_INSTALL_LOCATION=
+#export MMTESTS_VMS_AUTOYAST_DIR=
+#export MMTESTS_VMS_AUTOYAST="${SCRIPTDIR}/autoyast/opensuse.xml.erb"
+#export MMTESTS_VMS_DEPLOY_DISTRO="openSUSE-Tumbleweed"
+
+# MMTESTS_DEPLOY_DISTRO_SPEC is a "table" where:
+# - each "row" describes an OS/distribution that can be deployed inside a VM;
+# - the first "column" is the tag/name, used to refer to the entire row in
+#   various places (e.g., in the MMTESTS_VMS_DEPLOY_DISTRO variable);
+# - the second "column" is the so-called install location, i.e., from where
+#   the kernel and intrd images and the various packages should be retrieved
+#   (in case of network-based deployments);
+# - the third "column" is the name (or the path) of an AutoYaST file, used
+#   for making sure that the deploy happens in a fully non-interactive way.
+#   It can be the path of a valid AutoYaST profile that MMTests can fetch
+#   on the local filesystem, or the URL of one.
+#export MMTESTS_DEPLOY_DISTRO_SPEC="
+#my-Leap-15.3@https://download.opensuse.org/pub/opensuse/distribution/leap/15.3/repo/oss/@Leap-15.6_autoyast.xml
+#Tumbleweed@https://download.opensuse.org/pub/opensuse/tumbleweed/repo/oss/@$MMTESTS_VMS_AUTOYAST
+#"
+
+# Characteristics of the VMs. Valid for all VMs, unless a more
+# specific entry is present (below).
+#
+# TODO: Add a few words about the meaning and the use of each of these
+# (especially the disk format and deploying strategy ones).
+#export MMTESTS_VMS_MEMORY=
+#export MMTESTS_VMS_CPUS=
+#export MMTESTS_VMS_DISK_POOL=
+#export MMTESTS_VMS_DISK_FILE_SIZE=
+#export MMTESTS_IMPORT_DISK_FILE=
+#export MMTESTS_COPY_DISK_FILE=
+#export MMTESTS_COPY_DISK_COW=
+#export MMTESTS_COPY_DISK_DEST_PATH=
+
+# If the VM(s) is (are) imported, its (their) disk image can be
+# a copy of an already existing one:
+#export MMTESTS_VMS_COPY_DISK_FILE=/vmimages/vms.disk
+
+# All the above entries can be made more specific, e.g., they can be
+# specialized on a per-VM basis, in two ways (in this order):
+# - Associative arrays
+# - Standard variables
+#
+# The associative arrays way works as follows (note the lack of 'export'
+# at the beginning of the lines!):
+#
+# VM_CPUS["<vmname>"]=<value>
+# VM_MEMORY["<vmname>"]=<value>
+# ...
+#
+# The "standard variable way" involves defining standard config
+# variables with the name of the VM (as defined in the MMTESTS_VMS
+# array) as prefix, in spite of MMTESTS_.
+#
+# Note that this can be done only for VMs whose name is a valid Bash
+# identifier, i.e., only letters, numbers (but not at the beginning)
+# and "_". E.g., "opensuse-leap" is not, due to the "-".
+#
+# For example, this is how one ca speficy that the VM called
+# "opensuse-leap-15.4" shall have 2 vCPUs and 8 GB of RAM:
+# VM_CPUS["opensuse-leap-15.4"]=2
+# VM_MEMORY["opensuse-leap-15.4"]=8196
+#
+# And this is how we can specify that, instead, "vm1" shall be a
+# deployment of openSUSE Tumbleweed, with 4 vCPUs and 4 GB of RAM:
+#export vm1_DEPLOY_DISTRO="openSUSE-Tumbleweed"
+#export vm1_CPUS=4
+#export vm1_MEMORY=4096
+
 # If `numad` should be used on the host
 #export MMTESTS_NUMA_POLICY="numad"
 
