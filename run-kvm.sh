@@ -492,6 +492,85 @@ function prepare_and_start_vms() {
 	tune_vms_running
 }
 
+# Executes the payload on a single VM. Exported for GNU Parallel.
+function _deploy_and_run_hook() {
+	local ip="${1}"
+	local hook_file="${2}"
+	local hook_name
+	hook_name=$(basename "${hook_file}")
+	local remote_path="/tmp/mmtests_hook_${hook_name}"
+
+	# 1. Transport payload to the VM
+	scp ${MMTESTS_SSH_OPTIONS} "${hook_file}" "root@${ip}:${remote_path}" >/dev/null || {
+		echo "ERROR: Failed to copy ${hook_name} to ${ip}" >&2
+		return 1
+	}
+
+	# 2. Execute payload
+	# Disable local set -e: if the script triggers a "reboot",
+	# the SSH connection drops instantly, returning exit code 255.
+	set +e
+	ssh ${MMTESTS_SSH_OPTIONS} "root@${ip}" "bash ${remote_path}; rm -f ${remote_path}"
+	local ret=$?
+	set -e
+
+	# 0 = Clean success
+	# 255 = Connection dropped (expected if a reboot occurred either synchronously or asynchronously)
+	if [[ ${ret} -ne 0 && ${ret} -ne 255 ]]; then
+		echo "ERROR: Hook ${hook_name} on ${ip} failed with exit code ${ret}" >&2
+		return 1
+	fi
+
+	return 0
+}
+export -f _deploy_and_run_hook
+
+# Online hooks execution engine.
+function execute_online_hooks() {
+	local hook_list="${MMTESTS_VM_ONLINE_SCRIPTS:-}"
+	[[ -z "${hook_list}" ]] && return "${SHELLPACK_SUCCESS}"
+
+	local -a scripts
+	IFS=',' read -r -a scripts <<< "${hook_list}"
+
+	# Ensure Parallel has access to the orchestrator's SSH options
+	export MMTESTS_SSH_OPTIONS
+
+	local script payload
+	for script in "${scripts[@]}"; do
+		# Path resolution prioritizing the bin-virt directory
+		if [[ -x "${SCRIPTDIR}/bin-virt/${script}" ]]; then
+			payload="${SCRIPTDIR}/bin-virt/${script}"
+		elif [[ -x "${SCRIPTDIR}/${script}" ]]; then
+			payload="${SCRIPTDIR}/${script}"
+		elif command -v "${script}" >/dev/null 2>&1; then
+			payload="${script}"
+		else
+			echo "WARNING: Hook payload '${script}' not found or not executable. Skipping." >&2
+			continue
+		fi
+
+		echo "Deploying and executing payload: ${payload} across ${vmcount} VMs..."
+		activity_log "run-kvm: hook start :: ${script}"
+
+		# Isolated and parallel payload execution on VMs
+		parallel -j "${vmcount}" _deploy_and_run_hook {} "${payload}" ::: "${GUEST_IP[@]}" || die "ERROR: Payload ${script} failed on one or more VMs." >&2
+
+		# Sync Barrier: blocks the orchestrator until all VMs are responsive again.
+		# Vital if the executed hook rebooted the machines.
+		echo "Payload ${script} completed. Enforcing Sync Barrier..."
+		local v
+		for v in "${!VMS[@]}"; do
+			# 300 seconds timeout, check every 10 seconds
+			if ! vm_wait_ssh "${GUEST_IP[v]}" 300 10; then
+				die "ERROR: VM ${VMS[v]} (${GUEST_IP[v]}) did not return online after hook." >&2
+			fi
+		done
+
+		activity_log "run-kvm: hook end :: ${script}"
+	done
+}
+
 function setup_parallel() {
 	# Try installing the package, but we have a copy in bin/, as a fallback.
 	# For refreshing it:
@@ -899,6 +978,8 @@ function execute_tests() {
 	adjust_firewall
 
 	setup_parallel
+
+	execute_online_hooks
 
 	deploy_mmtests
 
