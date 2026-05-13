@@ -1,0 +1,22 @@
+#!/bin/bash
+# Hook Payload: Update packages and optionally reboot
+# Executed context: root @ guest_vm
+
+set -euo pipefail
+
+if grep -q 'ID_LIKE="suse"' /etc/os-release; then
+
+	zypper --non-interactive --gpg-auto-import-keys ref
+
+	if grep -q 'ID="opensuse-tumbleweed"' /etc/os-release; then
+		zypper --non-interactive dup --auto-agree-with-licenses --force-resolution --allow-downgrade --allow-vendor-change
+	else
+		zypper --non-interactive up --auto-agree-with-licenses --force-resolution
+	fi
+
+	# Cumbersome but cleaner than just 'reboot'.
+	nohup bash -c 'sleep 2; reboot' >/dev/null 2>&1 &
+
+fi
+
+exit 0
