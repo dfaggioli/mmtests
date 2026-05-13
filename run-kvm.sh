@@ -312,7 +312,9 @@ function parse_config() {
 		die "ERROR: When using more than 1 VM, define MMTESTS_HOST_IP!"
 	fi
 
-	MMTESTS_SSH_OPTIONS=" ${MMTESTS_SSH_CONFIG_OPTIONS:-} -o StrictHostKeyChecking=no -o ForwardAgent=no -o ForwardX11=no"
+	export MMTESTS_VMS_SSHKEY="${MMTESTS_VMS_SSHKEY:-${SCRIPTDIR}/.ssh/id_mmtests_ed25519}"
+	MMTESTS_VMS_SSHKEY="${MMTESTS_VMS_SSHKEY%.pub}"
+	MMTESTS_SSH_OPTIONS=" ${MMTESTS_SSH_CONFIG_OPTIONS:-} -o StrictHostKeyChecking=no -o ForwardAgent=no -o ForwardX11=no -o BatchMode=yes -o IdentitiesOnly=yes -i ${MMTESTS_VMS_SSHKEY}"
 }
 
 function prepare_host() {

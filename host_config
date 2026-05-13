@@ -16,6 +16,9 @@
 # anything involving SSH.
 #export MMTESTS_SSH_CONFIG_OPTIONS="-o LogLevel=INFO"
 
+# XXX
+#export MMTESTS_VMS_SSHKEY="${SCRIPTDIR}/.ssh/id_mmtests_ed25519}"
+
 # Let's have run-mmtests.sh output from the VMs in /tmp
 #export MMTESTS_PARALLEL_OUTDIR=/tmp
 
