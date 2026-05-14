@@ -7,102 +7,114 @@
 set "${MMTESTS_SH_DEBUG:-+x}"
 #set -euo pipefail
 
-# Global defaults
-DEFAULT_CONFIG=config
 export MARVIN_KVM_DOMAIN=${MARVIN_KVM_DOMAIN:-"marvin-mmtests"}
 
 function usage() {
-	echo "$0 [-pkonmh] [-C CONFIG_HOST] [--vm VMNAME[,VMNAME][,...]]  run-mmtests-options"
+	echo "$0 [-pkonmh] [-C CONFIG_HOST] [--vm VMNAME[,VMNAME][,...]] [--] run-mmtests-options"
 	echo
-	echo "-h|--help              Prints this help."
-	echo "-p|--performance       Force performance CPUFreq governor on the host before starting the tests"
-	echo "-L|--host-logs         Collect logs and hardware info about the host"
-	echo "-k|--keep-kernel       Use whatever kernel the VM currently has."
-	echo "-o|--offline-iothreads Take down some VM's CPUs and use for IOthreads."
-	echo "-m|--run-monitor       Force enable monitoring on the host."
-	echo "-n|--no-monitor        Force disable monitoring on the host."
-	echo "-C|--config-host CFG   Use CFG as config file for the host."
-	echo "--vm VMNAME[,VMNAME]   Name(s) of existing, and already known to 'virsh', VM(s)."
-	echo "                       If not specified, use \${MARVIN_KVM_DOMAIN} as VM name."
-	echo "                       If that is not defined, use 'marvin-mmtests'."
-	echo "run-mmtests-options    Parameters for run-mmtests.sh inside the VM (check them"
-	echo "                       with ./run-mmtests.sh -h)."
+	echo "-H|-h|--help                Prints this help."
+	echo "-P|--host-performance       Force performance CPUFreq governor on the host before starting the tests"
+	echo "-L|--host-logs              Collect logs and hardware info about the host"
+	echo "-K|--keep-kernel            Use whatever kernel the VM currently has."
+	echo "-O|--offline-iothreads      Take down some VM's CPUs and use for IOthreads."
+	echo "-M|--run-host-monitor       Force enable monitoring on the host."
+	echo "-N|--no-host-monitor        Force disable monitoring on the host."
+	echo "-C|--config-host CFG        Use CFG as config file for the host. Can be specified multiple times"
+	echo "--vm VMNAME[,VMNAME]        Name(s) of existing, and already known to 'virsh', VM(s)."
+	echo "                            If not specified, use \${MARVIN_KVM_DOMAIN} as VM name."
+	echo "                            If that is not defined, use 'marvin-mmtests'."
+	echo "run-mmtests-options         Parameters for run-mmtests.sh inside the VM (check them"
+	echo "                            with ./run-mmtests.sh -h)."
 	echo ""
 	echo "NOTE that 'run-mmtests-options', i.e., the parameters that will be used to execute"
 	echo "run-mmtests.sh inside the VMs, must always follow all the parameters intended for"
-	echo "run-kvm.sh itself."
+	echo "run-kvm.sh itself. For learning more about them, run './run-mmtests.sh -h'"
+	echo ""
+	echo "If a \"--\" parameter is found, parsing of run-kvm.sh arguments will immediately stop"
+	echo "and everything that follows will be passed to run-mmtests.sh (inside of the VMs)."
+	echo "Using this separator is recommended, as it makes clear which group of argument is meant"
+	echo "to what script, but not strictly required (for compatibility reasons)."
+}
+
+# Returns true if we're (reasonably) sure we're running inside Marvin.
+function running_in_marvin() {
+	[[ -z "${MMTESTS_HOST_IP:-}" &&
+	    ${#VMS[@]} -eq 1 &&
+	    "${VMS[0]}" = "${MARVIN_KVM_DOMAIN}" ]]
+}
+
+function should_sync_host_and_guests() {
+	[[ -n "${MMTESTS_HOST_IP:-}" ]]
 }
 
 # Parameters handling. Note that our own parmeters (i.e., run-kvm.sh
 # parameters) must always come *before* the parameters we want MMTests
 # inside the VM to use.
 #
-# There may be params that are valid arguments for both run-kvm.sh and
-# run-mmtests.sh. We need to make sure that they are parsed only once.
-# In fact, if we any of them is actually present twice, and we parse both
-# the occurrences in here, then run-mmtests.sh, when run inside the VMs(s),
-# will not see them.
+# Additionally, we want to stash this second set of parameters somewhere
+# and be able to both inspect them and actually forward them to run-mmtests.sh.
 #
-# This is why this code looks different than "traditional" parameter handling,
-# but it is either this, or we mandate that there can't be parameters with the
-# same names in run-kvm.sh and run-mmtests.sh.
+# This is why this code looks different than "traditional" parameter handling.
 function parse_args() {
 	declare -ga RUN_ARGS=()
 	declare -ga CONFIGS=()
 
+	# Default values
+	force_host_performance="no"
+	host_logs="no"
+	run_monitor=""
+
 	while true; do
 		case "${1:-}" in
-			-p|--performance)
-				if [ -z "${FORCE_HOST_PERFORMANCE_SETUP:-}" ]; then
-					FORCE_HOST_PERFORMANCE_SETUP="yes"
-					shift
-				else
-					break
-				fi
+			-P|--host-performance)
+				force_host_performance="yes"
+				shift
 				;;
 			-L|--host-logs)
-				HOST_LOGS="yes"
+				host_logs="yes"
 				shift
 				;;
-			-k|--keep-kernel)
-				KEEP_KERNEL="yes"
+			-K|-k|--keep-kernel)
+				keep_kernel="yes"
 				shift
 				;;
-			-o|--offline-iothreads)
-				OFFLINE_IOTHREADS="yes"
+			-O|-o|--offline-iothreads)
+				offline_iothreads="yes"
 				shift
 				;;
-			-m|--run-monitor)
-				if [ -z "${FORCE_RUN_MONITOR:-}" ]; then
-					FORCE_RUN_MONITOR="yes"
-					shift
-				else
-					break
-				fi
+			-M|--run-host-monitor)
+				run_monitor="yes"
+				shift
 				;;
-			-n|--no-monitor)
-				if [ -z "${FORCE_RUN_MONITOR:-}" ]; then
-					FORCE_RUN_MONITOR="no"
-					shift
-				else
-					break
-				fi
+			-N|--no-host-monitor)
+				run_monitor="no"
+				shift
 				;;
 			-C|--config-host)
-				shift
-				CONFIGS+=( "${1}" )
-				shift
+				if [[ -z "${2:-}" ]]; then
+					echo "ERROR: ${1} requires at least one config file name as an argument." >&2
+					usage
+					exit "${SHELLPACK_ERROR}"
+				fi
+				CONFIGS+=( "${2}" )
+				shift 2
 				;;
-			--vm|--vms)
-				shift
-				VMS_LIST="yes"
-				VMS=${1}
-				shift
+			--vm|--vms|--VM|--VMS)
+				if [[ -z "${2:-}" ]]; then
+					echo "ERROR: ${1} requires at least one VM name as an argument." >&2
+					usage
+					exit "${SHELLPACK_ERROR}"
+				fi
+				vms_from_cli="${2}"
+				shift 2
 				;;
-			-h|--help)
+			-h|-H|--help)
 				usage
 				exit "${SHELLPACK_SUCCESS}"
 				;;
+			--)
+				shift
+				;&
 			*)
 				break
 				;;
@@ -132,10 +144,6 @@ function prologue() {
 
 	export PATH="${SCRIPTDIR}/bin:${PATH}:${SCRIPTDIR}/bin-virt"
 
-	declare -ga MMTESTS_CONFIGS
-	declare -ga GUEST_IP
-	declare -ga VM_RUNNAME
-
 	# Custom unbiffer script, for clean termination of monitors
 	export EXPECT_UNBUFFER="${SCRIPTDIR}/bin/unbuffer"
 	# CURRENT_TEST is used only by monitors, so define it to
@@ -149,6 +157,13 @@ function prologue() {
 }
 
 function parse_config() {
+	declare -ga MMTESTS_CONFIGS=()
+	declare -ga VMS=()
+	declare -ga GUEST_IP=()
+
+	local default_mmtests_config=config
+	local default_host_config=host_config
+
 	# We want to read the config(s) that run-mmtests.sh will use inside
 	# the guests. Retrieve them from the command line parameters that we
 	# have not parsed, but without "consuming" them.
@@ -164,30 +179,72 @@ function parse_config() {
 			fi
 		fi
 	done
+	if (( ${#MMTESTS_CONFIGS[@]} == 0 )); then
+		echo "No config file specified for guests. They will use ${default_mmtests_config}"
+		MMTESTS_CONFIGS=( "${default_mmtests_config}" )
 
-	# No config file specified for guests, so they'll use the default.
-	[ ${#MMTESTS_CONFIGS[@]} -gt 0 ] || MMTESTS_CONFIGS=( "${DEFAULT_CONFIG}" )
+	fi
 
-	# If we have an host config, we use that one here. That's rather handy if,
-	# for instance, we want different monitors or topology related tuning
-	# on the host and in the guests.
-	#
-	# If, OTOH, we don't have an host config file, let's import the config
-	# file(s) of the guests and use them for the host as well.
-	[ ${#CONFIGS[@]} -gt 0 ] || CONFIGS=( "${MMTESTS_CONFIGS[@]}" )
+	if (( ${#CONFIGS[@]} == 0 )); then
+		echo "No config file specified for the host. We will use ${default_host_config}"
+		CONFIGS=( "${default_host_config}" )
+	fi
 
 	import_configs
+
+	# If we don't collect host logs, we cannot run any monitor, not even
+	# the ones configured as MONITORS_ALWAYS.
+	if [[ "${host_logs}" == "no" ]]; then
+		echo "WARNING: Cannot run monitors without host logs. Disabling them (including MONITOR_ALWAYS)"
+		run_monitor="no"
+		unset MONITORS_GZIP
+		unset MONITORS_WITH_LATENCY
+		unset MONITORS_TRACER
+		unset MONITORS_ALWAYS
+	fi
 
 	# Command line has priority. However, if there wasn't any `--vm` param, check
 	# if we have a list of VMs to use in the config files. If there's nothing
 	# there either, default to ${MARVIN_KVM_DOMAIN}
-	if [ -z "${VMS:-}" ] && [ "${MMTESTS_VMS:-}" != "" ]; then
-		VMS_LIST=yes
-		# MMTESTS_VMS is space separated, we want VMS to be comma separated
-		VMS=$(echo "${MMTESTS_VMS// /,}")
+	if [[ -n "${vms_from_cli:-}" ]]; then
+		IFS=',' read -r -a VMS <<< "${vms_from_cli}"
+	else
+		if [[ -n "${MMTESTS_VMS:-}" && -n "${MMTESTS_VMS_IP:-}" ]]; then
+			die "ERROR: define either MMTESTS_IP or MMTESTS_VMS_IP, not both!"
+		fi
+		if [[ -n "${MMTESTS_VMS:-}" ]]; then
+			read -r -a VMS <<< "${MMTESTS_VMS}"
+		elif [[ -n "${MMTESTS_VMS_IP:-}" ]]; then
+			# We only have the IPs of the VMs. Let's come
+			# up with some names...
+			local -a TMP_VMS_IPS=()
+			local ip
+			read -r -a TMP_VMS_IPS <<< "${MMTESTS_VMS_IP}"
+			for ip in "${TMP_VMS_IPS[@]}"; do
+				VMS+=( "vm${ip//./}" )
+			done
+			# As a "bonus", we can already populate GUEST_IP
+			read -r -a GUEST_IP <<< "${MMTESTS_VMS_IP}"
+		else
+			# No --vm, no MMTESTS_VMS and no MMTESTS_VMS_IP. Let's
+			# assume we're running inside marvin and try to continue.
+			VMS=( "${MARVIN_KVM_DOMAIN}" )
+		fi
 	fi
-	if [ -z "${VMS:-}" ]; then
-		VMS="${MARVIN_KVM_DOMAIN}"
+	vmcount=${#VMS[@]}
+
+	# Whether we are running in Marvin or, if not, from wherever we got
+	# the list of VMs, the array VMS _must_ exist at this point.
+	[[ ${#VMS[@]} -gt 0 ]] || die "ASSERT FAILED: VMS must exist at this point!"
+
+	# When using more than 1 VMs, we need MMTESTS_HOST_IP to be explicitly
+	# defined, so that we know that we should follow the lockstep protocol,
+	# and not just let them run.
+	#
+	# TODO: If more than 1 VM is used, and MMTESTS_HOST_IP is not defined, we
+	# can try to automatically figure it out, and let things proceed...
+	if (( vmcount > 1 )) && ! should_sync_host_and_guests ; then
+		die "ERROR: When using more than 1 VM, define MMTESTS_HOST_IP!"
 	fi
 
 	MMTESTS_SSH_OPTIONS=" ${MMTESTS_SSH_CONFIG_OPTIONS:-} -o StrictHostKeyChecking=no -o ForwardAgent=no -o ForwardX11=no"
@@ -196,7 +253,7 @@ function parse_config() {
 function prepare_host() {
 	# If MMTESTS_HOST_IP is defined, we are running as a standalone
 	# virtualization bench suite and we need to install some additional packages.
-	if [ -n "${MMTESTS_HOST_IP:-}" ]; then
+	if should_sync_host_and_guests ; then
 		install-depends expect netcat-openbsd iputils
 
 		# We also need to check that MMTESTS_HOST_IP is defined in the
@@ -205,10 +262,10 @@ function prepare_host() {
 		# So, we add it (and while there, AUTO_PACKAGE_INSTALL too).
 		local c
 		for c in "${MMTESTS_CONFIGS[@]}"; do
-			if [ "$(grep MMTESTS_HOST_IP "${c}")" = "" ] ; then
+			if ! grep -q MMTESTS_HOST_IP "${c}" ; then
 				echo "export MMTESTS_HOST_IP=${MMTESTS_HOST_IP}" >> "${c}"
 			fi
-			if [ "$(grep AUTO_PACKAGE_INSTALL "${c}")" = "" ] ; then
+			if ! grep -q AUTO_PACKAGE_INSTALL "${c}" ; then
 				echo "export AUTO_PACKAGE_INSTALL=\"yes\"" >> "${c}"
 			fi
 		done
@@ -233,93 +290,82 @@ function firewall_whitelist_ip() {
 function tune_vms_running() {
 	# LEGACY: This is only supported if we are running inside Marvin,
 	# and with only one VM.
-	if [ "${OFFLINE_IOTHREADS:-}" = "yes" ] &&
-	    [ "$VMS" = "$MARVIN_KVM_DOMAIN" ]; then
+	if [[ "${offline_iothreads:-}" == "yes" ]] &&
+	    running_in_marvin ; then
 		local offline_cpus=$(virsh dumpxml marvin-mmtests | grep -c iothreadpin)
 		if [ "${offline_cpus}" != "0" ]; then
+			local phys_cpu
+			local virt_cpu
 			echo Taking "${offline_cpus}" offline for pinned io threads
-			for PHYS_CPU in $(virsh dumpxml marvin-mmtests | grep iothreadpin | sed -e "s/.* cpuset='\([0-9]\+\)'.*/\1/"); do
-				local VIRT_CPU="$(virsh dumpxml marvin-mmtests | grep vcpupin | grep "cpuset='${PHYS_CPU}'" | sed -e "s/.* vcpu='\([0-9]\+\)'.*/\1/")"
-				ssh "root@${GUEST_IP[1]}" "echo 0 > /sys/devices/system/cpu/cpu${VIRT_CPU}/online"
-				echo "o Virt ${VIRT_CPU} phys ${PHYS_CPU}"
+			for phys_cpu in $(virsh dumpxml marvin-mmtests | grep iothreadpin | sed -e "s/.* cpuset='\([0-9]\+\)'.*/\1/"); do
+				local virt_cpu="$(virsh dumpxml marvin-mmtests | grep vcpupin | grep "cpuset='${phys_cpu}'" | sed -e "s/.* vcpu='\([0-9]\+\)'.*/\1/")"
+				ssh "root@${GUEST_IP[0]}" "echo 0 > /sys/devices/system/cpu/cpu${virt_cpu}/online"
+				echo "o Virt ${virt_cpu} phys ${phys_cpu}"
 			done
 		fi
 	fi
 }
 
 function prepare_and_start_vms() {
-	# Arrays where we store, for each VM, the IP and a VM-specific
-	# runname. The latter, in particular, is necessary because otherwise,
-	# when running the same benchmark in several VMs with different names,
-	# results would overwrite each other.
-	if [ "${MMTESTS_VMS_IP:-}" != "" ]; then
-		# MMTESTS_VMS_IP is space separated, we want it to be comma separated
-		IPS=$(echo "${MMTESTS_VMS_IP// /,}")
+	# We need a "runname" that is different for each VM as, otherwise,
+	# when running the same benchmark in several VMs results would
+	# overwrite each other.
+	declare -ga VM_RUNNAME=()
 
-		local i=1
-		for IP in $(tr ',' '\n' <<< "${IPS}")
+	local v
+	if [[ -n "${MMTESTS_VMS_IP:-}" ]]; then
+		for v in "${!VMS[@]}"
 		do
-			GUEST_IP[${i}]=${IP}
-			i=$(( ${i} + 1 ))
+			VM_RUNNAME[v]="${RUNNAME}-${VMS[v]}"
+
+			echo -n "checking VM: ${VMS[v]} at IP: ${GUEST_IP[v]} ..."
+			firewall_whitelist_ip "${GUEST_IP[v]}"
+			wait_ssh_available "${GUEST_IP[v]}"
+			echo "Ok!"
+
+			activity_log "run-kvm: VM ${VMS[v]} IP ${GUEST_IP[v]}"
 		done
-
-		local v=1
-		for VM in $(tr ',' '\n' <<< "${VMS}")
-		do
-			echo "checking VM: ${VM} at IP: ${GUEST_IP[${v}]}"
-			wait_ssh_available "${GUEST_IP[${v}]}"
-			echo "VM ready: ${VM} IP: ${GUEST_IP[${v}]}"
-			firewall_whitelist_ip "${GUEST_IP[${v}]}"
-			activity_log "run-kvm: VM ${VM} IP ${GUEST_IP[${v}]}"
-
-			VM_RUNNAME[${v}]="${RUNNAME}-${VM}"
-			v=$(( ${v} + 1 ))
-		done
-
-		[ ${v} -eq ${i} ] || die "MMTESTS_VMS and MMTESTS_VMS_IP mismatch"
+		teststate_log "VMs up :: $(date +%s)"
 	else
 		echo "Booting the VM(s)"
 		activity_log "run-kvm: Booting VMs"
 
 		# LEGACY: booting the current host kernel in VMs is, currently, only
 		# supported if we are running inside Marvin, and with only one VM.
-		if [ "${KEEP_KERNEL:-}" != "yes" ] &&
-		    [ "$VMS" = "$MARVIN_KVM_DOMAIN" ] &&
+		if [[ "${keep_kernel:-}" != "yes" ]] &&
+		    running_in_marvin &&
 		    [ -e "${SCRIPTDIR}/bin-virt/kvm-boot" ]; then
 			echo "Booting current kernel $(uname -r) ${MORE_BOOT_ARGS} on the guest"
 			kvm-boot $(uname -r) "${MORE_BOOT_ARGS}" || die "Failed to boot $(uname -r)"
 		else
-			kvm-start --vm "${VMS}" || die "Failed to boot VM(s)"
+			kvm-start --vm "$(IFS=,; echo "${VMS[*]}")" || die "Failed to boot VM(s)"
 		fi
 
 		teststate_log "VMs up :: $(date +%s)"
 
-		local v=1
-		for VM in $(tr ',' '\n' <<< "${VMS}")
+		for v in "${!VMS[@]}"
 		do
-			GUEST_IP[${v}]=$(kvm-ip-address --vm "${VM}")
-			echo "VM ready: ${VM} IP: ${GUEST_IP[${v}]}"
-			if [ "${HOST_LOGS:-}" = "yes" ]; then
-				virsh dumpxml "${VM}" > "${SHELLPACK_LOG}/${VM}".xml
-			fi
-			firewall_whitelist_ip "${GUEST_IP[${v}]}"
-			activity_log "run-kvm: VM ${VM} IP ${GUEST_IP[${v}]}"
+			VM_RUNNAME[v]="${RUNNAME}-${VMS[v]}"
 
-			VM_RUNNAME[${v}]="${RUNNAME}-${VM}"
-			v=$(( ${v} + 1 ))
+			GUEST_IP[v]=$(kvm-ip-address --vm "${VMS[v]}")
+			firewall_whitelist_ip "${GUEST_IP[v]}"
+
+			if [[ "${host_logs}" == "yes" ]]; then
+				virsh dumpxml ${VMS[v]} > "${SHELLPACK_LOG}/${VMS[v]}".xml
+			fi
+
+			echo "VM ready: ${VMS[v]} IP: ${GUEST_IP[v]}"
+			activity_log "run-kvm: VM ${VMS[v]} IP ${GUEST_IP[v]}"
 		done
 	fi
-	VMCOUNT=$(( v - 1 ))
 
 	tune_vms_running
 
 	# if we're not using firewall-cmd, let's just (desperately) try something with
 	# iptables, but I can't be sure it'll work equally well.
-	if [ -n "${MMTESTS_HOST_IP:-}" ] && ! command -v firewall-cmd &> /dev/null; then
+	if should_sync_host_and_guests && ! command -v firewall-cmd &> /dev/null; then
 		iptables -A INPUT -p tcp --dport "${MMTESTS_HOST_PORT:-1234}" -j ACCEPT || true
 	fi
-
-	[ ${VMCOUNT} -lt 1 ] && die "ERROR: No VM specified?"
 }
 
 function setup_parallel() {
@@ -333,8 +379,10 @@ function setup_parallel() {
 
 	# Create a clean array of SSH targets for GNU parallel
 	declare -ga TARGET_HOSTS=()
-	for (( v=1; v<=VMCOUNT; v++ )); do
-		TARGET_HOSTS+=( "root@${GUEST_IP[${v}]}" )
+
+	local i
+	for i in "${!GUEST_IP[@]}"; do
+		TARGET_HOSTS[i]="root@${GUEST_IP[i]}"
 	done
 
 	if [[ -n "${MMTESTS_PARALLEL_OUTDIR:-}" ]]; then
@@ -345,22 +393,22 @@ function setup_parallel() {
 }
 
 function deploy_mmtests() {
-	echo "Synchronizing mmtests directory to ${VMCOUNT} VMs via parallel rsync..."
+	echo "Synchronizing mmtests directory to ${vmcount} VMs via parallel rsync..."
 
 	NAME="$(basename "${SCRIPTDIR}")"
 	cd ..
 
 	# Create target directories in parallel
-	parallel -j "${VMCOUNT}" ssh ${MMTESTS_SSH_OPTIONS} {} "'mkdir -p git-private/${NAME}'" ::: "${TARGET_HOSTS[@]}" || die "Failed to create remote dirs"
+	parallel -j "${vmcount}" ssh ${MMTESTS_SSH_OPTIONS} {} "'mkdir -p git-private/${NAME}'" ::: "${TARGET_HOSTS[@]}" || die "Failed to create remote dirs"
 
 	# Rsync source code in parallel
 	export RSYNC_RSH="ssh ${MMTESTS_SSH_OPTIONS}"
-	parallel -j "${VMCOUNT}" rsync -az --delete "--exclude='work*'" "--exclude='.git'" "--exclude '*.tar.gz'" "${NAME}/" "{}:git-private/${NAME}/" ::: "${TARGET_HOSTS[@]}" || die "Failed to rsync ${NAME} (via parallel)"
+	parallel -j "${vmcount}" rsync -az --delete "--exclude='work*'" "--exclude='.git'" "--exclude '*.tar.gz'" "${NAME}/" "{}:git-private/${NAME}/" ::: "${TARGET_HOSTS[@]}" || die "Failed to rsync ${NAME} (via parallel)"
 
-	parallel -j "${VMCOUNT}" ssh ${MMTESTS_SSH_OPTIONS} {} "'cd git-private/${NAME} && rm -rf work/log/* work-*.tar.gz'" ::: "${TARGET_HOSTS[@]}" || true
+	parallel -j "${vmcount}" ssh ${MMTESTS_SSH_OPTIONS} {} "'cd git-private/${NAME} && rm -rf work/log/* work-*.tar.gz'" ::: "${TARGET_HOSTS[@]}" || true
 
 	# Ensure automatic package installation flag is set
-	parallel -j "${VMCOUNT}" ssh ${MMTESTS_SSH_OPTIONS} {} "'touch ~/.mmtests-auto-package-install'" ::: "${TARGET_HOSTS[@]}" || die "Failed to set auto-package install flag"
+	parallel -j "${vmcount}" ssh ${MMTESTS_SSH_OPTIONS} {} "'touch ~/.mmtests-auto-package-install'" ::: "${TARGET_HOSTS[@]}" || die "Failed to set auto-package install flag"
 
 	cd "${NAME}"
 }
@@ -370,39 +418,35 @@ function tune_host() {
 	start_tuned
 
 	# Set performance governor on the host, if wanted
-	if [ "${FORCE_HOST_PERFORMANCE_SETUP:-}" = "yes" ]; then
-		FORCE_HOST_PERFORMANCE_SCALINGGOV_BASE="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
-		local NOTURBO="/sys/devices/system/cpu/intel_pstate/no_turbo"
-		[ -f ${NOTURBO} ] && FORCE_HOST_PERFORMANCE_NOTURBO_BASE="$(cat ${NOTURBO})"
+	if [[ "${force_host_performance}" == "yes" && -f "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor" ]]; then
+		host_scalinggov_base="$(< /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
+		if [[ -f "/sys/devices/system/cpu/intel_pstate/no_turbo" ]]; then
+			host_noturbo_base="$(< "/sys/devices/system/cpu/intel_pstate/no_turbo")"
+		fi
 		force_performance_setup || true
 	fi
 }
 
 function prepare_host_monitors() {
-	# Check host monitors
-	if [ "${FORCE_RUN_MONITOR:-}" != "" ]; then
-		RUN_MONITOR="${FORCE_RUN_MONITOR}"
-	fi
-	if [ "${RUN_MONITOR:-}" = "no" ] || [ "${HOST_LOGS:-}" != "yes" ]; then
-		# Disable monitor
+	RUN_MONITOR="${run_monitor:-${RUN_MONITOR:-}}"
+	if [[ "${RUN_MONITOR:-}" == "no" ]]; then
+		# Disable monitors (except MONITORS_ALWAYS)
 		unset MONITORS_GZIP
 		unset MONITORS_WITH_LATENCY
 		unset MONITORS_TRACER
-		# If we don't collect host logs, we don't want to monitor it either,
-		# not even with 'always on' monitors. In fact, we don't have a place
-		# where we could store the data!
-		[ "${HOST_LOGS:-}" != "yes" ] && unset MONITORS_ALWAYS
 	else
 		# Check at least one monitor is enabled
-		if [ -z "${MONITORS_ALWAYS:-}" ] && [ -z "${MONITORS_GZIP:-}" ] && [ -z "${MONITORS_WITH_LATENCY:-}" ] && [ -z "${MONITORS_TRACER:-}" ]; then
+		if [[ -z "${MONITORS_ALWAYS:-}" &&
+		      -z "${MONITORS_GZIP:-}" &&
+		      -z "${MONITORS_WITH_LATENCY:-}" &&
+		      -z "${MONITORS_TRACER:-}" ]]; then
 			echo WARNING: Monitors enabled but none configured
 		fi
 	fi
 
-	STAP_USED=
-	MONITOR_STAP=
+	STAP_USED=""
 	check_monitor_stap
-	if [ "${STAP_USED}" != "" ]; then
+	if [[ -n "${STAP_USED:-}" ]]; then
 		fixup_stap
 	fi
 }
@@ -431,7 +475,7 @@ function prepare_host_monitors() {
 #                           | tokens++     |
 #                           v              |
 #                 +-------------------+    |
-#                 |tokens == VMCOUNT ?+----+
+#                 |tokens == vmcount ?+----+
 #                 +---------+---------+
 #                           |YES/
 #                           | tokens=0
@@ -443,7 +487,7 @@ function prepare_host_monitors() {
 #            |              | tokens++     |NO
 #            |              v              |
 #   test_do/ |    +-------------------+    |
-#    tokens=1|    |tokens == VMCOUNT ?+----+
+#    tokens=1|    |tokens == vmcount ?+----+
 #            |    +---------+---------+
 #            |              |YES/
 #            |              | tokens=0
@@ -461,7 +505,7 @@ function prepare_host_monitors() {
 #      |   |                | tokens++         |     |   |
 #      |   |                v                  |     |   |
 #      |   |      +-------------------+        |     |   |
-#      |   |      |tokens == VMCOUNT ?+--------+     |   |
+#      |   |      |tokens == vmcount ?+--------+     |   |
 #      |   |      +---------+---------+              |   |
 #      |   |                |YES/           test_done|   |
 #      |   |                | tokens=0       tokens=1|   |
@@ -473,7 +517,7 @@ function prepare_host_monitors() {
 #      |   | tokens=0       | tokens++        |      |   |
 #      |   |                v                 |      |   |
 #      |   |      +-------------------+       |      |   |
-#      |   +------+tokens == VMCOUNT ?+-------+      |   |
+#      |   +------+tokens == vmcount ?+-------+      |   |
 #      |          +-------------------+              |   |
 #      |                                             |   |
 #      |              +-----------+                  |   |
@@ -483,7 +527,7 @@ function prepare_host_monitors() {
 #      | tokens=0           | tokens++     |             |
 #      |                    v              |             |
 #      |          +-------------------+    |             |
-#      +----------+tokens == VMCOUNT ?+----+             |
+#      +----------+tokens == vmcount ?+----+             |
 #                 +-------------------+                  |
 #                                                        |
 #                    +-------------+<--------------------+
@@ -493,7 +537,7 @@ function prepare_host_monitors() {
 #                           | tokens++     |NO
 #                           v              |
 #  +-------+      +-------------------+    |
-#  | QUIT  |<-----+tokens == VMCOUNT ?+----+
+#  | QUIT  |<-----+tokens == vmcount ?+----+
 #  +-------+      +-------------------+
 #
 # For figuring out when VMs send the tokens for any give state,
@@ -512,8 +556,8 @@ function log_state() {
 }
 
 function synchronize_vms() {
-	if [ -n "${MMTESTS_HOST_IP:-}" ]; then
-		[ ${VMCOUNT} -ne 1 ] && echo "TIME     STATE           VMs"
+	if should_sync_host_and_guests ; then
+		if (( vmcount != 1 )); then echo "TIME     STATE           VMs"; fi
 		local STATE="mmtests_start"
 		local tokens=0
 		local NCFILE="$(mktemp)"
@@ -526,7 +570,7 @@ function synchronize_vms() {
 			# With only 1 VM, there is not much to be synched. We just need
 			# to reply with the very same token we receive, in order to
 			# unblock each phase of run-mmtests.sh, inside the VM itself.
-			if (( VMCOUNT == 1 )); then
+			if (( vmcount == 1 )); then
 				case "${TOKEN}" in
 					"mmtests_start"|"test_do"|"iteration_begin"|"iteration_end"|"test_done")
 						mmtests_signal_token "${TOKEN}" "${GUEST_IP[@]}"
@@ -561,7 +605,7 @@ function synchronize_vms() {
 							echo -n 'X'
 							tokens=$(( tokens + 1 ))
 						fi
-						if (( tokens == VMCOUNT )); then
+						if (( tokens == vmcount )); then
 							tokens=0
 							if [[ "${STATE}" == "mmtests_start" ]]; then
 								STATE="test_do"
@@ -624,34 +668,34 @@ function synchronize_vms() {
 }
 
 function collect_results() {
-	echo "Syncing ${SHELLPACK_LOG_BASE_SUBDIR} from ${VMCOUNT} VMs"
+	echo "Syncing ${SHELLPACK_LOG_BASE_SUBDIR} from ${vmcount} VMs"
 
 	# Archive results remotely with parallel. We use parallel's multiple input
 	# arrays (::: and :::+) to match IPs with their specific runnames.
 	echo "Archiving results on guests"
-	parallel -j "${VMCOUNT}" ssh ${MMTESTS_SSH_OPTIONS} root@{1} "'cd git-private/${NAME} && tar -czf work-{2}.tar.gz ${SHELLPACK_LOG_BASE_SUBDIR}'" \
+	parallel -j "${vmcount}" ssh ${MMTESTS_SSH_OPTIONS} root@{1} "'cd git-private/${NAME} && tar -czf work-{2}.tar.gz ${SHELLPACK_LOG_BASE_SUBDIR}'" \
 		::: "${GUEST_IP[@]}" :::+ "${VM_RUNNAME[@]}" || die "Failed to archive results remotely"
 
 	# Now we can download all the archives, also in parallel.
 	echo "Downloading archives"
-	parallel -j "${VMCOUNT}" scp ${MMTESTS_SSH_OPTIONS} "'root@{1}:git-private/${NAME}/work-{2}.tar.gz'" . \
+	parallel -j "${vmcount}" scp ${MMTESTS_SSH_OPTIONS} "'root@{1}:git-private/${NAME}/work-{2}.tar.gz'" . \
 		::: "${GUEST_IP[@]}" :::+ "${VM_RUNNAME[@]}" || die "Failed to download archives"
 
 	# And, eventually, we extract and rename the directory in a way that's
 	# familiar for other MMTests tools.
 	echo "Extracting local archives"
 	local v
-	for (( v=1; v<=VMCOUNT; v++ )); do
-		# Do not change behavior, file names, etc, if no VM list is specified.
-		# That, in fact, is how currently Marvin works, and we don't want to break it.
-		local new_runname="${RUNNAME}"
-		if [ "${VMS_LIST:-}" = "yes" ]; then
-			new_runname="${VM_RUNNAME[${v}]}"
+	for v in ${!VMS[@]}; do
+		local new_runname="${VM_RUNNAME[v]}"
+		if running_in_marvin ; then
+			# Marvin expects results in "${RUNNAME}", and we don't
+			# want to break it, so let's reinstate the old name.
+			new_runname="${RUNNAME}"
 		fi
 
 		# Store the results of benchmark named `FOO`, done in VM 'bar' in
 		# a directory called 'bar-FOO (and cleanup the now unnecessary archive).
-		local tar_file="work-${VM_RUNNAME[${v}]}.tar.gz"
+		local tar_file="work-${VM_RUNNAME[v]}.tar.gz"
 		tar --transform="s|${RUNNAME}|${new_runname}|" -xf ${tar_file} || die "Failed to extract ${tar_file}"
 		rm -f "${tar_file}"
 	done
@@ -663,7 +707,7 @@ function stop_vms() {
 	else
 		echo "Shutting down the VM(s)"
 		activity_log "run-kvm: Shutoff VMs"
-		kvm-stop --vm "${VMS}"
+		kvm-stop --vm "$(IFS=,; echo "${VMS[*]}")"
 		teststate_log "VMs down :: $(date +%s)"
 	fi
 }
@@ -680,7 +724,8 @@ function execute_tests() {
 	MMTEST_HOST_ITERATION=0
 
 	# We only collect logs if the '-L' parameter was present.
-	if [ "${HOST_LOGS:-}" = "yes" ]; then
+	local timestamps="/dev/null"
+	if [[ "${host_logs}" == "yes" ]]; then
 		export SHELLPACK_LOG="${SHELLPACK_LOG_BASE}/${RUNNAME}-host/iter-${MMTEST_HOST_ITERATION}"
 		# Delete old runs
 		rm -rf "${SHELLPACK_LOG}" &>/dev/null
@@ -688,8 +733,9 @@ function execute_tests() {
 		export SHELLPACK_ACTIVITY="${SHELLPACK_LOG}/tests-activity"
 		export SHELLPACK_LOGFILE="${SHELLPACK_LOG}/tests-timestamp"
 		export SHELLPACK_SYSSTATEFILE="${SHELLPACK_LOG}/tests-sysstate"
-		rm -f "${SHELLPACK_ACTIVITY}" "${SHELLPACK_LOGFILE}" "${SHELLPACK_SYSSTATEFILE}"
+		timestamps="${SHELLPACK_LOG}/timestamp"
 	fi
+
 
 	activity_log "run-kvm: Iteration $((MMTEST_HOST_ITERATION+1)) start"
 
@@ -705,7 +751,7 @@ function execute_tests() {
 	setup_parallel
 	deploy_mmtests
 
-	echo "Executing mmtests in $VMCOUNT guest(s)"
+	echo "Executing mmtests in ${vmcount} guest(s)"
 	teststate_log "test begin :: $(date +%s)"
 	activity_log "run-kvm: test start :: $(date +%s)"
 
@@ -723,8 +769,8 @@ function execute_tests() {
 		parallel_cmd="${parallel_cmd} > ${MMTESTS_PARALLEL_OUTDIR}/{}.log 2>&1"
 	fi
 
-	/usr/bin/time -f "time :: ${CURRENT_TEST} %U user %S system %e elapsed" -o "${SHELLPACK_LOG}/timestamp" \
-		parallel --line-buffer -j "${VMCOUNT}" "${parallel_cmd}" ::: "${TARGET_HOSTS[@]}" &
+	/usr/bin/time -f "time :: ${CURRENT_TEST} %U user %S system %e elaps/ed" -o "${timestamps}" \
+		parallel --line-buffer -j "${vmcount}" "${parallel_cmd}" ::: "${TARGET_HOSTS[@]}" &
 	PARALLEL_PID=$!
 
 	synchronize_vms
@@ -744,7 +790,7 @@ function execute_tests() {
 
 	teststate_log "finish :: $(date +%s)"
 
-	if [ "${HOST_LOGS:-}" = "yes" ]; then
+	if [[ "${host_logs}" == "yes" ]]; then
 		dmesg > "${SHELLPACK_LOG}/dmesg"
 		gzip -f "${SHELLPACK_LOG}/dmesg"
 		gzip -f "${SHELLPACK_SYSSTATEFILE}"
@@ -770,9 +816,7 @@ function cleanup() {
 	shutdown_numad
 	shutdown_tuned
 
-	if [ "${FORCE_HOST_PERFORMANCE_SETUP:-}" = "yes" ] && [ -n "${FORCE_HOST_PERFORMANCE_SCALINGGOV_BASE:-}" ]; then
-		restore_performance_setup "${FORCE_HOST_PERFORMANCE_SCALINGGOV_BASE}" "${FORCE_HOST_PERFORMANCE_NOTURBO_BASE:-}" || true
-	fi
+	restore_performance_setup "${host_scalinggov_base:-}" "${host_noturbo_base:-}" || true
 
 	command exit "${EXIT_CODE}"
 }
