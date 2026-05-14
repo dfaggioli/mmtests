@@ -1,6 +1,12 @@
-# Example MM Test host config file, for run-kvm.sh
-export MMTESTS_HOST_IP="192.168.122.1"
-export AUTO_PACKAGE_INSTALL="yes"
+# Example host config file, for run-kvm.sh
+#
+# ***NB: IF WANTING TO USE run-kvm.sh AS A STANDALONE VIRTUALIZATION
+#        BENCHMARKING TOOL (I.E., OUTSIDE OF MARVIN), MMTESTS_HOST_IP
+#        *MUST* BE DEFINED (SO, UNCOMMENT THE LINE BELOW AND SET IT
+#        TO THE PROPER VALUE).***
+#
+#export MMTESTS_HOST_IP="192.168.122.1"
+#export AUTO_PACKAGE_INSTALL="yes"
 
 # SSH options, in the sshd_config(5) format (see `-o` in `man ssh`). MMTests
 # already uses `-o StrictHostKeyChecking=no` (and a few others, e.g., for
@@ -23,18 +29,28 @@ export AUTO_PACKAGE_INSTALL="yes"
 #export MMTESTS_HOST_PORT=1234
 #export MMTESTS_GUEST_PORT=4321
 
-# If the VMs are up already, and we know their IPs, we can
-# use them directly. Note that this means:
-# - run-kmv.sh will not (try to) power on the VMs, it will
-#   assume that they're up already and go straight to try
-#   to connect to them
-# - run-kvm.sh will not (try to) shutdonw the VMs at the
-#   end of the benchmark, it will just leave them as they
-#   are
-# - the MMTESTS_VMS array must be provided as well, and it
-#   must have the same number of entries than MMTESTS_VMS_IP
-#   (and names will be associated with IPs in the order they
-#   are found in the two arrays)
+# The list of the VMs in which we want to run the benchmarks can be specified
+# in multiple ways:
+# - command line (--vm or --vms parameter)
+# - here, in the host config file, via MMTESTS_VMS
+# - here, in the host config file, via MMTESTS_VMS_IP
+#
+# Command line has priority, so, if there's a --vm (or --vms) parameter,
+# both MMTESTS_VMS and MMTESTS_VMS_IP will be ignored. If there's no such
+# parameter, MMTESTS_VMS and MMTESTS_VMS_IP are checked, and they must be
+# considered mutially exclusive (i.e., if one is defined, the other must
+# be empty!).
+#
+# If only MMTESTS_VMS_IP is defined, run-kvm.sh will assume that a set of
+# VMs with those IP addresses is already running, and will "just" try to
+# reach them and run the benchmarks inside them. If that is not the case
+# it will fail. It will also not try to shut them down at the end, nor
+# to manage their lifecycle in any way.
+#
+# If, on the other hand, we have the VM names (either via MMTESTS_VMS or
+# via command line), run-kvm.sh will be able to try to enact a much more
+# sophisticated handling of the VMs lifecycle (like starting and stopping
+# them automatically, but also more than just that).
 #export MMTESTS_VMS_IP="192.168.122.24 192.168.122.38"
 #export MMTESTS_VMS="vm_a vm_b"
 
@@ -46,9 +62,7 @@ export AUTO_PACKAGE_INSTALL="yes"
 
 # List of monitors for the host
 export RUN_MONITOR=yes
-export MONITORS_ALWAYS="top"
+export MONITORS_ALWAYS=
 export MONITORS_GZIP="proc-vmstat mpstat"
 export MONITORS_WITH_LATENCY="vmstat"
-export MONITORS_TRACER="perf-event-stat"
-export MONITOR_PERF_EVENTS=cpu-migrations,context-switches
-export MONITOR_UPDATE_FREQUENCY=10
+export MONITOR_UPDATE_FREQUENCY=1
