@@ -1,0 +1,23 @@
+#!/bin/bash
+# Offline Hook Payload: Disable CPU mitigations
+# Executed context: root @ guest_vm (chroot environment via virt-customize)
+
+set -euo pipefail
+
+# In an offline context, we cannot query /proc/cmdline.
+# We must directly inspect and modify the GRUB configuration file.
+if grep -q "GRUB_CMDLINE_LINUX_DEFAULT" /etc/default/grub; then
+	if ! grep -q "mitigations=off" /etc/default/grub; then
+		# Safely append mitigations=off to the default cmdline parameters
+		sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)/\1 mitigations=off/' /etc/default/grub
+
+		# Rebuild the GRUB configuration
+		if command -v update-bootloader >/dev/null 2>&1; then
+			update-bootloader --refresh
+		elif command -v grub2-mkconfig >/dev/null 2>&1; then
+			grub2-mkconfig -o /boot/grub2/grub.cfg
+		fi
+	fi
+fi
+
+exit 0

@@ -393,6 +393,107 @@ function reset_firewall() {
 	fi
 }
 
+# Applies all offline configurations to a VM disk image (e.g., SSH key
+# injection and hostname adjustment) and also execute the offline hook
+# scripts defined by the user.
+# Parameters: <vm_name> <disk_path>
+function offline_configs_and_hooks() {
+	local vm="${1}"
+	local disk_path="${2}"
+	local config_path
+
+	install-depends guestfs-tools
+
+	local priv_key="${MMTESTS_VMS_SSHKEY}"
+	local pub_key="${priv_key}.pub"
+
+	if [[ -f "${pub_key}" ]]; then
+		if ! ssh-keygen -l -f "${pub_key}" >/dev/null 2>&1; then
+			die "ERROR: File ${pub_key} exists but is not a valid SSH public key" >&2
+		fi
+	else
+		echo "Generating a new SSH key at ${priv_key}..."
+		mkdir -p "$(dirname "${priv_key}")"
+		ssh-keygen -t ed25519 -f "${priv_key}" -N "" -q -C "mmtests-automation@vms" || die "${SHELLPACK_ERROR}"
+	fi
+
+	# "Cross-Distro" SSH configuration. We try to support both Distro that
+	# still have a monolithic /etc/ssh/sshd_config, and modern ones that
+	# have /usr/etc/ssh/ + /etc/ssh/sshd_config.d/.
+	local ssh_setup_payload='
+	set -e
+	if [ -d /etc/ssh/sshd_config.d ] || grep -qs "Include /etc/ssh/sshd_config.d" /etc/ssh/sshd_config /usr/etc/ssh/sshd_config; then
+		# Modern distributions (Tumbleweed, newer SLES, RHEL 9+)
+		mkdir -p /etc/ssh/sshd_config.d
+		echo "PermitRootLogin yes" > /etc/ssh/sshd_config.d/99-mmtests-debug.conf
+		echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config.d/99-mmtests-debug.conf
+	else
+		# Legacy distributions (CentOS 7, older SLES/Debian)
+		[ -f /etc/ssh/sshd_config ] || touch /etc/ssh/sshd_config
+
+		# Replace if existing, otherwise append safely
+		if grep -q "^#*PermitRootLogin" /etc/ssh/sshd_config; then
+			sed -i "s/^#*PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config
+		else
+			echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
+		fi
+
+		if grep -q "^#*PasswordAuthentication" /etc/ssh/sshd_config; then
+			sed -i "s/^#*PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config
+		else
+			echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config
+		fi
+	fi
+	'
+
+	echo "Applying offline configurations to ${vm}..."
+
+	local -a virt_opts=(
+		"-a" "${disk_path}"
+		"--hostname" "${vm}"
+		"--run-command" "echo '${vm}' > /etc/hostname"
+		"--run-command" "echo '${vm}' > /etc/HOSTNAME"
+		"--run-command" "systemctl enable sshd || true"
+		"--run-command" "${ssh_setup_payload}"
+		"--root-password" "password:test"
+		"--run-command" "sed -i '/mmtests-automation@vms/d' /root/.ssh/authorized_keys 2>/dev/null || true"
+		"--ssh-inject" "root:file:${pub_key}"
+	)
+
+	# Parse and append offline hooks
+	local offline_hooks="${MMTESTS_VM_OFFLINE_SCRIPTS:-}"
+	if [[ -n "${offline_hooks}" ]]; then
+		local -a scripts
+		IFS=',' read -r -a scripts <<< "${offline_hooks}"
+
+		local script payload hook_name
+		for script in "${scripts[@]}"; do
+			# Resolve the script path
+			if [[ -x "${SCRIPTDIR}/bin-virt/${script}" ]]; then
+				payload="${SCRIPTDIR}/bin-virt/${script}"
+			elif [[ -x "${SCRIPTDIR}/${script}" ]]; then
+				payload="${SCRIPTDIR}/${script}"
+			elif command -v "${script}" >/dev/null 2>&1; then
+				payload="${script}"
+			else
+				echo "WARNING: Offline hook '${script}' not found. Skipping." >&2
+				continue
+			fi
+
+			# Instruct virt-customize to upload, execute, and cleanup the payload
+			hook_name=$(basename "${payload}")
+			virt_opts+=("--upload" "${payload}:/tmp/mmtests_offline_${hook_name}")
+			virt_opts+=("--run-command" "bash /tmp/mmtests_offline_${hook_name}")
+			virt_opts+=("--run-command" "rm -f /tmp/mmtests_offline_${hook_name}")
+		done
+	fi
+
+	# Core requirement for RHEL/Fedora/SUSE guests to avoid SELinux lockouts
+	virt_opts+=("--selinux-relabel")
+
+	virt-customize "${virt_opts[@]}" >/dev/null 2>&1 || die "ERROR: Failed to apply offline configurations for ${vm}" >&2
+}
+
 function tune_vms_running() {
 	# LEGACY: This is only supported if we are running inside Marvin,
 	# and with only one VM.
@@ -457,6 +558,38 @@ function prepare_and_start_vms() {
 		# Sync barrier for the VMs that are being created and installed.
 		for vm in "${deploying_vms[@]}"; do
 			libvirt::vm_deploy_wait "${vm}" || die "Deployment failed for VM: ${vm}"
+		done
+
+		# Adjust the VM configuration and run all the hook scripts that can be run
+		# with the VM offline. As it can be rather slow, we run multiple instances
+		# in parallel (but not too many, or we'd saturate the host's IOPS).
+		local max_io_jobs=4
+		local running_jobs=0
+		local pids=()
+		for v in "${!VMS[@]}"; do
+			local disk_path
+			disk_path=$(libvirt::get_vm_disk_path "${VMS[v]}")
+
+			if [[ -z "${disk_path}" ]]; then
+				echo "WARNING: Could not determine disk path for ${VMS[v]}. Skipping offline hooks." >&2
+				continue
+			fi
+
+			# Avvio asincrono della configurazione in background
+			offline_configs_and_hooks "${VMS[v]}" "${disk_path}" &
+			pids+=($!)
+			((running_jobs++))
+
+			# Controllo della concorrenza (Sliding Window)
+			# Se raggiungiamo il limite, aspettiamo che termini il PRIMO job disponibile
+			if (( running_jobs >= max_io_jobs )); then
+				wait -n || die "FATAL: Offline hook failed for one of the concurrent VMs"
+				((running_jobs--))
+			fi
+		done
+		# Final sync barrier
+		for pid in "${pids[@]}"; do
+			wait "${pid}" || die "FATAL: Offline hook failed during final sync"
 		done
 
 		# LEGACY: booting the current host kernel in VMs is, currently, only

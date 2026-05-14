@@ -465,75 +465,6 @@ ${MMTESTS_DEPLOY_DISTRO_SPEC:-}
 	echo "${default_spec}" | awk -v d="${distro}@" '$0 ~ "^" d { match_line=$0 } END { if (match_line) print match_line }' || true
 }
 
-# Injects the configured SSH key into a VM disk image offline
-# Validates existing keys or generates new ones dynamically
-# Parameters: <vm_name> <disk_path>
-function libvirt::inject_ssh_key() {
-	local vm="${1}"
-	local disk_path="${2}"
-	local config_path
-	
-	install-depends guestfs-tools
-	
-	local priv_key="${MMTESTS_VMS_SSHKEY}"
-	local pub_key="${priv_key}.pub"
-	
-	# Validate existing key or generate a new one
-	if [[ -f "${pub_key}" ]]; then
-		if ! ssh-keygen -l -f "${pub_key}" >/dev/null 2>&1; then
-			echo "ERROR: File ${pub_key} exists but is not a valid SSH public key" >&2
-			return "${SHELLPACK_ERROR}"
-		fi
-	else
-		echo "Generating a new SSH key at ${priv_key}..."
-		mkdir -p "$(dirname "${priv_key}")"
-		ssh-keygen -t ed25519 -f "${priv_key}" -N "" -q -C "mmtests-automation@vms" || return "${SHELLPACK_ERROR}"
-	fi
-	
-	echo "Injecting SSH keys into ${vm} using ${pub_key}..."
-
-	# "Cross-Distro" SSH configuration. We try to support both Distro that
-	# still have a monolithic /etc/ssh/sshd_config, and modern ones that
-	# have /usr/etc/ssh/ + /etc/ssh/sshd_config.d/.
-	local ssh_setup_payload='
-	set -e
-	if [ -d /etc/ssh/sshd_config.d ] || grep -qs "Include /etc/ssh/sshd_config.d" /etc/ssh/sshd_config /usr/etc/ssh/sshd_config; then
-		# Modern distributions (Tumbleweed, newer SLES, RHEL 9+)
-		mkdir -p /etc/ssh/sshd_config.d
-		echo "PermitRootLogin yes" > /etc/ssh/sshd_config.d/99-mmtests-debug.conf
-		echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config.d/99-mmtests-debug.conf
-	else
-		# Legacy distributions (CentOS 7, older SLES/Debian)
-		[ -f /etc/ssh/sshd_config ] || touch /etc/ssh/sshd_config
-		
-		# Replace if existing, otherwise append safely
-		if grep -q "^#*PermitRootLogin" /etc/ssh/sshd_config; then
-			sed -i "s/^#*PermitRootLogin.*/PermitRootLogin yes/" /etc/ssh/sshd_config
-		else
-			echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
-		fi
-		
-		if grep -q "^#*PasswordAuthentication" /etc/ssh/sshd_config; then
-			sed -i "s/^#*PasswordAuthentication.*/PasswordAuthentication yes/" /etc/ssh/sshd_config
-		else
-			echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config
-		fi
-	fi
-	'
-
-	virt-customize -a "${disk_path}" \
-		--run-command 'systemctl enable sshd || true' \
-		--run-command "${ssh_setup_payload}"
-		--ssh-inject root:file:"${pub_key}" \
-		--root-password "password:test"
-		--selinux-relabel >/dev/null 2>&1 || {
-			echo "WARNING: Failed to run virt-customize on ${disk_path}" >&2
-			return "${SHELLPACK_ERROR}"
-		}
-
-	return "${SHELLPACK_SUCCESS}"
-}
-
 # Triggers the background deployment of a VM with virt-install. If there's
 # the need to deploy multiple VMs, this function can be called for all of them,
 # so installation can happen in parallel.
@@ -650,9 +581,6 @@ function libvirt::vm_deploy_start() {
 
 			# Append the detected or forced format to the virt-install specification
 			disk_spec="${copy_dest_file},bus=virtio,discard=unmap${disk_format}"
-
-			# Inject SSH keys immediately since the OS already exists
-			libvirt::inject_ssh_key "${vm}" "${copy_dest_file}" || return "${SHELLPACK_ERROR}"
 		else
 			disk_spec="${import_disk},bus=virtio,discard=unmap"
 		fi
@@ -787,17 +715,6 @@ function libvirt::vm_deploy_wait() {
 		rm -f "${marker}"
 		echo "VM ${vm} imported successfully (no OS deployment wait required)."
 		libvirt::vm_stop "${vm}" || true
-
-		# Extract disk path and inject SSH keys now that the OS is installed
-		local disk_path
-		disk_path=$(virsh domblklist "${vm}" | awk 'NR>2 && $2 != "-" {print $2; exit}')
-		if [[ -n "${disk_path}" ]]; then
-			libvirt::inject_ssh_key "${vm}" "${disk_path}" || return "${SHELLPACK_ERROR}"
-		else
-			echo "ERROR: Could not determine disk path for ${vm} to inject SSH keys." >&2
-			return "${SHELLPACK_ERROR}"
-		fi
-
 		return "${SHELLPACK_SUCCESS}"
 	fi
 
@@ -887,6 +804,15 @@ function libvirt::unpin_vm_ip() {
 
 	echo "INFO: Successfully removed static IP binding for ${vm}."
 	return 0
+}
+
+# Retrieves the primary disk path of a VM.
+# Parameters: <vm_name>
+function libvirt::get_vm_disk_path() {
+	local vm="${1}"
+	# Returns the first valid block device (ignoring CD-ROMs)
+	# TODO: Handle VMs with multiple disks
+	virsh domblklist "${vm}" | awk 'NR>2 && $2 != "-" {print $2; exit}'
 }
 
 # Legacy orchestrator: performs infinite polling with a threshold-based hard-reset policy.
