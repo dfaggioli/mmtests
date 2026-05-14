@@ -36,6 +36,18 @@ clean_exit()
 	if [ "$OFFLINED_CPUS" = "1" ]; then
 		online-cpus
 	fi
+
+	if [ -n "$MMTESTS_HOST_IP" ]; then
+		if command -v firewall-cmd >/dev/null 2>&1 && [ "$(firewall-cmd --state 2>/dev/null)" = "running" ]; then
+			firewall-cmd --reload >/dev/null 2>&1
+		elif command -v iptables >/dev/null 2>&1; then
+			if [ -n "$IPTABLES_GUEST_BACKUP" ] && [ -f "$IPTABLES_GUEST_BACKUP" ]; then
+				iptables-restore < $IPTABLES_GUEST_BACKUP >/dev/null 2>&1
+				rm -f $IPTABLES_GUEST_BACKUP
+				IPTABLES_GUEST_BACKUP=""
+			fi
+		fi
+	fi
 }
 
 begin_shutdown() {
@@ -245,6 +257,17 @@ if [ ! -z "$MMTESTS_HOST_IP" ]; then
 		iptables -A INPUT -p tcp --dport ${MMTESTS_GUEST_PORT:-4321} -j ACCEPT
 	fi
 fi
+
+if [ -n "$MMTESTS_HOST_IP" ]; then
+	if command -v firewall-cmd >/dev/null 2>&1 && [ "$(firewall-cmd --state 2>/dev/null)" = "running" ]; then
+		firewall-cmd --zone=trusted --add-source=$MMTESTS_HOST_IP >/dev/null 2>&1
+	elif command -v iptables >/dev/null 2>&1; then
+		IPTABLES_GUEST_BACKUP=$(mktemp /tmp/mmtests-guest-iptables-XXXXXX.bak)
+		iptables-save > $IPTABLES_GUEST_BACKUP
+		iptables -I INPUT 1 -p tcp --dport ${MMTESTS_GUEST_PORT:-4321} -j ACCEPT >/dev/null 2>&1
+	fi
+fi
+
 
 # Set some basic performance cpu frequency settings.
 if ! $BUILDONLY && [ "$FORCE_PERFORMANCE_SETUP" = "yes" ]; then

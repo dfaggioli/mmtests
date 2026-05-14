@@ -8,6 +8,7 @@ set "${MMTESTS_SH_DEBUG:-+x}"
 #set -euo pipefail
 
 export MARVIN_KVM_DOMAIN=${MARVIN_KVM_DOMAIN:-"marvin-mmtests"}
+export MMTESTS_HOST_PORT=${MMTESTS_HOST_PORT:-1234}
 
 function usage() {
 	echo "$0 [-pkonmh] [-C CONFIG_HOST] [--vm VMNAME[,VMNAME][,...]] [--] run-mmtests-options"
@@ -277,13 +278,52 @@ function prepare_host() {
 	install_tuned
 }
 
-# We need to be able to reach the guest at the port we use for guest-host
-# communication, even if a firewall is up. This should work fine if with
-# firewalld/firewall-cmd.
-function firewall_whitelist_ip() {
-	local IP=${1}
-	if command -v firewall-cmd &> /dev/null && [ "$(firewall-cmd --state)" = "running" ]; then
-		firewall-cmd --zone=trusted --add-source="${IP}"
+# We need the VMs to be able to reach the host, for the guest-host
+# synchronization protocol's purposes.
+function adjust_firewall() {
+	# This is all relevant only if we're running as a standalone suite
+	# and if there's more than just one VM.
+	if running_in_marvin || ! should_sync_host_and_guests ; then return; fi
+
+	if command -v firewall-cmd &> /dev/null &&
+	   [[ "$(firewall-cmd --state 2>/dev/null)" == "running" ]]; then
+		# Guests must be able to reach the host
+		local ip
+		for ip in "${GUEST_IP[@]}"; do
+			firewall-cmd --zone=trusted --add-source="${ip}" &>/dev/null || \
+				die "ERROR: Cannot allow traffic from ${ip} in the firewall!"
+		done
+		# Above allow-listing should be enough, but let's just be sure
+		# by explicitly opening the "host port".
+		firewall-cmd --add-port="${MMTESTS_HOST_PORT}/tcp" &>/dev/null || \
+			die "ERROR: Cannot open ${MMTESTS_HOST_PORT} in the firewall!"
+	elif command -v iptables &> /dev/null; then
+		# Let's save the current state first...
+		iptables_backup_file=$(mktemp /tmp/mmtests-iptables-XXXXXX.bak)
+		iptables-save > "${iptables_backup_file}"
+		# ...And then, as above, open things up.
+		for ip in "${GUEST_IP[@]}"; do
+			iptables -I INPUT 1 -s "${ip}" -j ACCEPT 2>/dev/null || \
+				die "ERROR: Cannot allow traffic from ${ip} in the firewall!"
+		done
+		iptables -I INPUT 1 -p tcp --dport "${MMTESTS_HOST_PORT}" -j ACCEPT 2>/dev/null || \
+			die "ERROR: Cannot allow traffic to port ${MMTESTS_HOST_PORT} in the firewall!"
+	fi
+}
+
+function reset_firewall() {
+	if command -v firewall-cmd &> /dev/null &&
+	   [[ "$(firewall-cmd --state 2>/dev/null)" == "running" ]]; then
+		local ip
+		for ip in "${GUEST_IP[@]}"; do
+			firewall-cmd --zone=trusted --remove-source="${ip}" &>/dev/null || true
+		done
+		firewall-cmd --remove-port="${MMTESTS_HOST_PORT}/tcp" &>/dev/null || true
+	elif command -v iptables &> /dev/null &&
+	     [[ -n "${iptables_backup_file:-}" && -f "${iptables_backup_file}" ]]; then
+		iptables-restore < "${iptables_backup_file}" 2>/dev/null || true
+		rm -f "${iptables_backup_file}"
+		iptables_backup_file=""
 	fi
 }
 
@@ -319,7 +359,6 @@ function prepare_and_start_vms() {
 			VM_RUNNAME[v]="${RUNNAME}-${VMS[v]}"
 
 			echo -n "checking VM: ${VMS[v]} at IP: ${GUEST_IP[v]} ..."
-			firewall_whitelist_ip "${GUEST_IP[v]}"
 			wait_ssh_available "${GUEST_IP[v]}"
 			echo "Ok!"
 
@@ -348,7 +387,6 @@ function prepare_and_start_vms() {
 			VM_RUNNAME[v]="${RUNNAME}-${VMS[v]}"
 
 			GUEST_IP[v]=$(kvm-ip-address --vm "${VMS[v]}")
-			firewall_whitelist_ip "${GUEST_IP[v]}"
 
 			if [[ "${host_logs}" == "yes" ]]; then
 				virsh dumpxml ${VMS[v]} > "${SHELLPACK_LOG}/${VMS[v]}".xml
@@ -360,12 +398,6 @@ function prepare_and_start_vms() {
 	fi
 
 	tune_vms_running
-
-	# if we're not using firewall-cmd, let's just (desperately) try something with
-	# iptables, but I can't be sure it'll work equally well.
-	if should_sync_host_and_guests && ! command -v firewall-cmd &> /dev/null; then
-		iptables -A INPUT -p tcp --dport "${MMTESTS_HOST_PORT:-1234}" -j ACCEPT || true
-	fi
 }
 
 function setup_parallel() {
@@ -748,7 +780,11 @@ function execute_tests() {
 	collect_sysconfig_info
 
 	prepare_and_start_vms
+
+	adjust_firewall
+
 	setup_parallel
+
 	deploy_mmtests
 
 	echo "Executing mmtests in ${vmcount} guest(s)"
@@ -817,6 +853,8 @@ function cleanup() {
 	shutdown_tuned
 
 	restore_performance_setup "${host_scalinggov_base:-}" "${host_noturbo_base:-}" || true
+
+	reset_firewall
 
 	command exit "${EXIT_CODE}"
 }
