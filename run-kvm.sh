@@ -907,9 +907,6 @@ function synchronize_vms() {
 		if (( vmcount != 1 )); then echo "TIME     STATE           VMs"; fi
 		local STATE="mmtests_start"
 		local tokens=0
-		local NCFILE="$(mktemp)"
-		nc ${_NCV:-} -n -4 -l -k "${MMTESTS_HOST_IP}" "${MMTESTS_HOST_PORT}" > "${NCFILE}" &
-		NCPID=$!
 
 		tail -f "${NCFILE}" | while [[ "${STATE}" != "QUIT" ]] && read -r TOKEN
 		do
@@ -1005,6 +1002,7 @@ function synchronize_vms() {
 		done || true
 		kill "${NCPID}" || true
 		rm -f "${NCFILE}"
+		NCPID=""
 	fi
 
 	# Wait for GNU parallel completion and capture its return value
@@ -1131,6 +1129,12 @@ function execute_tests() {
 	activity_log "run-kvm: begin run-mmtests in VMs"
 	teststate_log "test begin :: $(date +%s)"
 	activity_log "run-kvm: begin ${CURRENT_TEST}"
+
+	# XXX
+	[[ -n "${NCPID:-}" ]] && kill "${NCPID}" 2>/dev/null || true
+	local NCFILE="$(mktemp)"
+	nc ${_NCV:-} -n -4 -l -k "${MMTESTS_HOST_IP}" "${MMTESTS_HOST_PORT}" > "${NCFILE}" &
+	NCPID=$!
 
 	local parallel_cmd="ssh ${MMTESTS_SSH_OPTIONS} {} 'cd git-private/${NAME} && ./run-mmtests.sh ${RUN_ARGS[*]}'"
 	if [[ -n "${MMTESTS_PARALLEL_OUTDIR:-}" ]]; then
