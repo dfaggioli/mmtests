@@ -155,6 +155,9 @@
 #export vm1_MEMORY=4096
 
 # XXX
+# export MMTESTS_VM_OFFLINE_SCRIPTS=kvm-set-mitigations-off,kvm-disable-selinux
+
+# XXX
 # export MMTESTS_VM_ONLINE_SCRIPTS=kvm-update-packages
 
 # If `numad` should be used on the host

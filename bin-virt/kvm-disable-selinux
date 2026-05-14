@@ -1,0 +1,57 @@
+#!/bin/bash
+# Offline Hook Payload: Disable SELinux
+# Executed context: root @ guest_vm (chroot environment via virt-customize)
+
+set -euo pipefail
+
+echo "INFO: Starting offline SELinux disable hook..."
+
+# 1. Fallback for systems without SELinux config
+if [[ -f "/etc/selinux/config" ]]; then
+	sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
+fi
+
+# 2. Kernel parameter injection via /etc/default/grub
+if [[ -f "/etc/default/grub" ]]; then
+	# Sanitize existing SELinux parameters
+	sed -i 's/ selinux=1//g; s/ enforcing=0//g; s/ selinux=0//g' /etc/default/grub
+	
+	if grep -q "^GRUB_CMDLINE_LINUX=" /etc/default/grub; then
+		sed -i 's/^GRUB_CMDLINE_LINUX="/GRUB_CMDLINE_LINUX="selinux=0 /' /etc/default/grub
+	else
+		echo 'GRUB_CMDLINE_LINUX="selinux=0"' >> /etc/default/grub
+	fi
+
+	# 3. Rebuild GRUB config (grubby removed, relying strictly on mkconfig)
+	if command -v grub2-mkconfig >/dev/null 2>&1 || command -v grub-mkconfig >/dev/null 2>&1; then
+		mkconfig_cmd=$(command -v grub2-mkconfig || command -v grub-mkconfig)
+		
+		# Known paths for GRUB config files (BIOS and UEFI across distros)
+		cfg_paths=(
+			"/boot/grub2/grub.cfg"
+			"/boot/efi/EFI/redhat/grub.cfg"
+			"/boot/efi/EFI/centos/grub.cfg"
+			"/boot/efi/EFI/fedora/grub.cfg"
+			"/boot/grub/grub.cfg"
+		)
+		
+		updated=0
+		for cfg in "${cfg_paths[@]}"; do
+			if [[ -f "${cfg}" ]]; then
+				echo "INFO: Rebuilding GRUB config at ${cfg}..."
+				"${mkconfig_cmd}" -o "${cfg}" >/dev/null 2>&1 || true
+				updated=1
+				break
+			fi
+		done
+		
+		if [[ "${updated}" -eq 0 ]]; then
+			echo "WARNING: No valid grub.cfg found. Kernel parameter injected but not applied to bootloader."
+		fi
+	else
+		echo "WARNING: mkconfig tools not found. Cannot rebuild bootloader configuration."
+	fi
+fi
+
+echo "INFO: SELinux disable hook completed."
+exit 0
