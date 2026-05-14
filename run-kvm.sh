@@ -1,9 +1,10 @@
 #!/bin/bash
-#
+# shellcheck enable=require-variable-braces
+
 # Author: Dario Faggioli <dfaggioli@suse.com>
 # script for running mmtests in one or multiple VMs
 
-set ${MMTESTS_SH_DEBUG:-+x}
+set "${MMTESTS_SH_DEBUG:-+x}"
 #set -euo pipefail
 
 # Global defaults
@@ -22,7 +23,7 @@ function usage() {
 	echo "-n|--no-monitor        Force disable monitoring on the host."
 	echo "-C|--config-host CFG   Use CFG as config file for the host."
 	echo "--vm VMNAME[,VMNAME]   Name(s) of existing, and already known to 'virsh', VM(s)."
-	echo "                       If not specified, use \$MARVIN_KVM_DOMAIN as VM name."
+	echo "                       If not specified, use \${MARVIN_KVM_DOMAIN} as VM name."
 	echo "                       If that is not defined, use 'marvin-mmtests'."
 	echo "run-mmtests-options    Parameters for run-mmtests.sh inside the VM (check them"
 	echo "                       with ./run-mmtests.sh -h)."
@@ -50,9 +51,9 @@ function parse_args() {
 	declare -ga CONFIGS=()
 
 	while true; do
-		case "$1" in
+		case "${1:-}" in
 			-p|--performance)
-				if [ -z ${FORCE_HOST_PERFORMANCE_SETUP:-} ]; then
+				if [ -z "${FORCE_HOST_PERFORMANCE_SETUP:-}" ]; then
 					FORCE_HOST_PERFORMANCE_SETUP="yes"
 					shift
 				else
@@ -72,7 +73,7 @@ function parse_args() {
 				shift
 				;;
 			-m|--run-monitor)
-				if [ -z ${FORCE_RUN_MONITOR:-} ]; then
+				if [ -z "${FORCE_RUN_MONITOR:-}" ]; then
 					FORCE_RUN_MONITOR="yes"
 					shift
 				else
@@ -80,7 +81,7 @@ function parse_args() {
 				fi
 				;;
 			-n|--no-monitor)
-				if [ -z ${FORCE_RUN_MONITOR:-} ]; then
+				if [ -z "${FORCE_RUN_MONITOR:-}" ]; then
 					FORCE_RUN_MONITOR="no"
 					shift
 				else
@@ -89,18 +90,18 @@ function parse_args() {
 				;;
 			-C|--config-host)
 				shift
-				CONFIGS+=( "$1" )
+				CONFIGS+=( "${1}" )
 				shift
 				;;
 			--vm|--vms)
 				shift
 				VMS_LIST="yes"
-				VMS=$1
+				VMS=${1}
 				shift
 				;;
 			-h|--help)
 				usage
-				exit $SHELLPACK_SUCCESS
+				exit "${SHELLPACK_SUCCESS}"
 				;;
 			*)
 				break
@@ -120,23 +121,23 @@ function parse_args() {
 }
 
 function prologue() {
-	DIRNAME="$(dirname $0)"
-	SCRIPTDIR="$(cd "$DIRNAME" && pwd)"
+	DIRNAME="$(dirname "${0}")"
+	SCRIPTDIR="$(cd "${DIRNAME}" && pwd)"
 
 	#set +euo pipefail
-	source $SCRIPTDIR/shellpacks/common.sh
-	source $SCRIPTDIR/shellpacks/common-config.sh
-	source $SCRIPTDIR/shellpacks/monitors.sh
+	source "${SCRIPTDIR}/shellpacks/common.sh"
+	source "${SCRIPTDIR}/shellpacks/common-config.sh"
+	source "${SCRIPTDIR}/shellpacks/monitors.sh"
 	#set -euo pipefail
 
-	export PATH="$SCRIPTDIR/bin:$PATH:$SCRIPTDIR/bin-virt"
+	export PATH="${SCRIPTDIR}/bin:${PATH}:${SCRIPTDIR}/bin-virt"
 
 	declare -ga MMTESTS_CONFIGS
 	declare -ga GUEST_IP
 	declare -ga VM_RUNNAME
 
 	# Custom unbiffer script, for clean termination of monitors
-	export EXPECT_UNBUFFER=$SCRIPTDIR/bin/unbuffer
+	export EXPECT_UNBUFFER="${SCRIPTDIR}/bin/unbuffer"
 	# CURRENT_TEST is used only by monitors, so define it to
 	# 'monitor' for now. We may change this, if/when we will
 	# support per-test monitoring.
@@ -167,7 +168,7 @@ function parse_config() {
 	done
 
 	# No config file specified for guests, so they'll use the default.
-	[ ${#MMTESTS_CONFIGS[@]} -gt 0 ] || MMTESTS_CONFIGS=( "$DEFAULT_CONFIG" )
+	[ ${#MMTESTS_CONFIGS[@]} -gt 0 ] || MMTESTS_CONFIGS=( "${DEFAULT_CONFIG}" )
 
 	# If we have an host config, we use that one here. That's rather handy if,
 	# for instance, we want different monitors or topology related tuning
@@ -181,18 +182,18 @@ function parse_config() {
 
 	# Command line has priority. However, if there wasn't any `--vm` param, check
 	# if we have a list of VMs to use in the config files. If there's nothing
-	# there either, default to $MARVIN_KVM_DOMAIN
-	if [ -z ${VMS:-} ] && [ "${MMTESTS_VMS:-}" != "" ]; then
+	# there either, default to ${MARVIN_KVM_DOMAIN}
+	if [ -z "${VMS:-}" ] && [ "${MMTESTS_VMS:-}" != "" ]; then
 		VMS_LIST=yes
 		# MMTESTS_VMS is space separated, we want VMS to be comma separated
-		VMS=$(echo ${MMTESTS_VMS// /,})
+		VMS=$(echo "${MMTESTS_VMS// /,}")
 	fi
-	if [ -z ${VMS:-} ]; then
-		VMS=$MARVIN_KVM_DOMAIN
+	if [ -z "${VMS:-}" ]; then
+		VMS="${MARVIN_KVM_DOMAIN}"
 	fi
 
 	MMTESTS_SSH_CONFIG_OPTIONS+="-o StrictHostKeyChecking=no -o ForwardAgent=no -o ForwardX11=no"
-	MMTESTS_PSSH_OPTIONS+=" -t 0 $(echo $MMTESTS_SSH_CONFIG_OPTIONS|sed s/-o/-O/g)"
+	MMTESTS_PSSH_OPTIONS+=" -t 0 $(echo "${MMTESTS_SSH_CONFIG_OPTIONS}"|sed s/-o/-O/g)"
 }
 
 function prepare_host() {
@@ -206,7 +207,7 @@ function prepare_host() {
 	# that this var exists that tells guests that they need to contact the host
 	# for coordination of the test runs). So, we add it (and while there, add
 	# AUTO_PACKAGE_INSTALL too).
-	if [ -n ${MMTESTS_HOST_IP:-} ]; then
+	if [ -n "${MMTESTS_HOST_IP:-}" ]; then
 		install-depends expect netcat-openbsd iputils
 
 		install-depends gnu_parallel
@@ -219,11 +220,11 @@ function prepare_host() {
 
 		local c
 		for c in "${MMTESTS_CONFIGS[@]}"; do
-			if [ "$(grep MMTESTS_HOST_IP ${c})" = "" ] ; then
-				echo "export MMTESTS_HOST_IP=${MMTESTS_HOST_IP}" >> ${c}
+			if [ "$(grep MMTESTS_HOST_IP "${c}")" = "" ] ; then
+				echo "export MMTESTS_HOST_IP=${MMTESTS_HOST_IP}" >> "${c}"
 			fi
-			if [ "$(grep AUTO_PACKAGE_INSTALL ${c})" = "" ] ; then
-				echo "export AUTO_PACKAGE_INSTALL=\"yes\"" >> ${c}
+			if [ "$(grep AUTO_PACKAGE_INSTALL "${c}")" = "" ] ; then
+				echo "export AUTO_PACKAGE_INSTALL=\"yes\"" >> "${c}"
 			fi
 		done
 	fi
@@ -238,9 +239,9 @@ function prepare_host() {
 # communication, even if a firewall is up. This should work fine if with
 # firewalld/firewall-cmd.
 function firewall_whitelist_ip() {
-	local IP=$1
+	local IP=${1}
 	if command -v firewall-cmd &> /dev/null && [ "$(firewall-cmd --state)" = "running" ]; then
-		firewall-cmd --zone=trusted --add-source=${IP}
+		firewall-cmd --zone=trusted --add-source="${IP}"
 	fi
 }
 
@@ -250,12 +251,12 @@ function tune_vms_running() {
 	if [ "${OFFLINE_IOTHREADS:-}" = "yes" ] &&
 	    [ "$VMS" = "$MARVIN_KVM_DOMAIN" ]; then
 		local offline_cpus=$(virsh dumpxml marvin-mmtests | grep -c iothreadpin)
-		if [ "$offline_cpus" != "0" ]; then
-			echo Taking $offline_cpus offline for pinned io threads
+		if [ "${offline_cpus}" != "0" ]; then
+			echo Taking "${offline_cpus}" offline for pinned io threads
 			for PHYS_CPU in $(virsh dumpxml marvin-mmtests | grep iothreadpin | sed -e "s/.* cpuset='\([0-9]\+\)'.*/\1/"); do
-				local VIRT_CPU=$(virsh dumpxml marvin-mmtests | grep vcpupin | grep "cpuset='$PHYS_CPU'" | sed -e "s/.* vcpu='\([0-9]\+\)'.*/\1/")
-				ssh root@${GUEST_IP[1]} "echo 0 > /sys/devices/system/cpu/cpu$VIRT_CPU/online"
-				echo o Virt $VIRT_CPU phys $PHYS_CPU
+				local VIRT_CPU="$(virsh dumpxml marvin-mmtests | grep vcpupin | grep "cpuset='${PHYS_CPU}'" | sed -e "s/.* vcpu='\([0-9]\+\)'.*/\1/")"
+				ssh "root@${GUEST_IP[1]}" "echo 0 > /sys/devices/system/cpu/cpu${VIRT_CPU}/online"
+				echo "o Virt ${VIRT_CPU} phys ${PHYS_CPU}"
 			done
 		fi
 	fi
@@ -268,31 +269,31 @@ function prepare_and_start_vms() {
 	# results would overwrite each other.
 	if [ "${MMTESTS_VMS_IP:-}" != "" ]; then
 		# MMTESTS_VMS_IP is space separated, we want it to be comma separated
-		IPS=$(echo ${MMTESTS_VMS_IP// /,})
+		IPS=$(echo "${MMTESTS_VMS_IP// /,}")
 
 		local i=1
-		for IP in $(tr ',' '\n' <<< "$IPS")
+		for IP in $(tr ',' '\n' <<< "${IPS}")
 		do
-			GUEST_IP[$i]=$IP
-			i=$(( $i + 1 ))
+			GUEST_IP[${i}]=${IP}
+			i=$(( ${i} + 1 ))
 		done
 
 		local v=1
-		for VM in $(tr ',' '\n' <<< "$VMS")
+		for VM in $(tr ',' '\n' <<< "${VMS}")
 		do
-			echo "checking VM: $VM at IP: ${GUEST_IP[$v]}"
-			wait_ssh_available ${GUEST_IP[$v]}
-			SSH_HOST="root@${GUEST_IP[$v]}"
-			PSSH_HOSTS+=" -H $SSH_HOST"
-			echo "VM ready: $VM IP: ${GUEST_IP[$v]}"
-			firewall_whitelist_ip ${GUEST_IP[$v]}
-			activity_log "run-kvm: VM $VM IP ${GUEST_IP[$v]}"
+			echo "checking VM: ${VM} at IP: ${GUEST_IP[${v}]}"
+			wait_ssh_available "${GUEST_IP[${v}]}"
+			SSH_HOST="root@${GUEST_IP[${v}]}"
+			PSSH_HOSTS+=" -H ${SSH_HOST}"
+			echo "VM ready: ${VM} IP: ${GUEST_IP[${v}]}"
+			firewall_whitelist_ip "${GUEST_IP[${v}]}"
+			activity_log "run-kvm: VM ${VM} IP ${GUEST_IP[${v}]}"
 
-			VM_RUNNAME[$v]="$RUNNAME-$VM"
-			v=$(( $v + 1 ))
+			VM_RUNNAME[${v}]="${RUNNAME}-${VM}"
+			v=$(( ${v} + 1 ))
 		done
 
-		[ $v -eq $i ] || die "MMTESTS_VMS and MMTESTS_VMS_IP mismatch"
+		[ ${v} -eq ${i} ] || die "MMTESTS_VMS and MMTESTS_VMS_IP mismatch"
 	else
 		echo "Booting the VM(s)"
 		activity_log "run-kvm: Booting VMs"
@@ -301,30 +302,30 @@ function prepare_and_start_vms() {
 		# supported if we are running inside Marvin, and with only one VM.
 		if [ "${KEEP_KERNEL:-}" != "yes" ] &&
 		    [ "$VMS" = "$MARVIN_KVM_DOMAIN" ] &&
-		    [ -e $SCRIPTDIR/bin-virt/kvm-boot ]; then
-			echo Booting current kernel $(uname -r) $MORE_BOOT_ARGS on the guest
-			kvm-boot $(uname -r) $MORE_BOOT_ARGS || die "Failed to boot $(uname -r)"
+		    [ -e "${SCRIPTDIR}/bin-virt/kvm-boot" ]; then
+			echo "Booting current kernel $(uname -r) ${MORE_BOOT_ARGS} on the guest"
+			kvm-boot $(uname -r) "${MORE_BOOT_ARGS}" || die "Failed to boot $(uname -r)"
 		else
-			kvm-start --vm $VMS || die "Failed to boot VM(s)"
+			kvm-start --vm "${VMS}" || die "Failed to boot VM(s)"
 		fi
 
 		teststate_log "VMs up :: $(date +%s)"
 
 		local v=1
-		for VM in $(tr ',' '\n' <<< "$VMS")
+		for VM in $(tr ',' '\n' <<< "${VMS}")
 		do
-			GUEST_IP[$v]=$(kvm-ip-address --vm $VM)
-			echo "VM ready: $VM IP: ${GUEST_IP[$v]}"
-			SSH_HOST="root@${GUEST_IP[$v]}"
-			PSSH_HOSTS+=" -H $SSH_HOST"
+			GUEST_IP[${v}]=$(kvm-ip-address --vm "${VM}")
+			echo "VM ready: ${VM} IP: ${GUEST_IP[${v}]}"
+			SSH_HOST="root@${GUEST_IP[${v}]}"
+			PSSH_HOSTS+=" -H ${SSH_HOST}"
 			if [ "${HOST_LOGS:-}" = "yes" ]; then
-				virsh dumpxml $VM > $SHELLPACK_LOG/$VM.xml
+				virsh dumpxml "${VM}" > "${SHELLPACK_LOG}/${VM}".xml
 			fi
-			firewall_whitelist_ip ${GUEST_IP[$v]}
-			activity_log "run-kvm: VM $VM IP ${GUEST_IP[$v]}"
+			firewall_whitelist_ip "${GUEST_IP[${v}]}"
+			activity_log "run-kvm: VM ${VM} IP ${GUEST_IP[${v}]}"
 
-			VM_RUNNAME[$v]="$RUNNAME-$VM"
-			v=$(( $v + 1 ))
+			VM_RUNNAME[${v}]="${RUNNAME}-${VM}"
+			v=$(( ${v} + 1 ))
 		done
 	fi
 	VMCOUNT=$(( v - 1 ))
@@ -333,23 +334,23 @@ function prepare_and_start_vms() {
 
 	# if we're not using firewall-cmd, let's just (desperately) try something with
 	# iptables, but I can't be sure it'll work equally well.
-	if [ -n ${MMTESTS_HOST_IP:-} ] && ! command -v firewall-cmd &> /dev/null; then
-		iptables -A INPUT -p tcp --dport ${MMTESTS_HOST_PORT:-1234} -j ACCEPT || true
+	if [ -n "${MMTESTS_HOST_IP:-}" ] && ! command -v firewall-cmd &> /dev/null; then
+		iptables -A INPUT -p tcp --dport "${MMTESTS_HOST_PORT:-1234}" -j ACCEPT || true
 	fi
 
-	[ $VMCOUNT -lt 1 ] && die "ERROR: No VM specified?"
+	[ ${VMCOUNT} -lt 1 ] && die "ERROR: No VM specified?"
 }
 
 function setup_pssh() {
-	if [ $VMCOUNT -eq 1 ]; then
+	if [ ${VMCOUNT} -eq 1 ]; then
 		PSCP=scp
 		PSSH=ssh
-		# Of course, using $SSH_HOST like this makes sense only because we know
+		# Of course, using ${SSH_HOST} like this makes sense only because we know
 		# that there is only 1 VM.
-		SSH_TARGET="$SSH_HOST"
-		SCP_TARGET="$SSH_TARGET:~"
-		PSSH_OPTS="$MMTESTS_SSH_CONFIG_OPTIONS"
-	elif [ -z ${MMTESTS_HOST_IP:-} ]; then
+		SSH_TARGET="${SSH_HOST}"
+		SCP_TARGET="${SSH_TARGET}:~"
+		PSSH_OPTS="${MMTESTS_SSH_CONFIG_OPTIONS}"
+	elif [ -z "${MMTESTS_HOST_IP:-}" ]; then
 		# When using more than 1 VMs, we need MMTESTS_HOST_IP to be explicitly
 		# defined, so that we know that we should follow the lockstep protocol,
 		# and not just let it/them run.
@@ -388,21 +389,21 @@ function setup_pssh() {
 					;;
 			esac
 		fi
-		command -v $PSCP &> /dev/null || die "ERROR: pscp not available. Cannot continue!"
-		command -v $PSSH &> /dev/null || die "pscp is there, but not pssh? Too weird to continue!"
+		command -v ${PSCP} &> /dev/null || die "ERROR: pscp not available. Cannot continue!"
+		command -v ${PSSH} &> /dev/null || die "pscp is there, but not pssh? Too weird to continue!"
 
-		PSSH_OPTS="$PSSH_OPTS $PSSH_HOSTS $MMTESTS_PSSH_OPTIONS -p $(( VMCOUNT * 2 ))"
+		PSSH_OPTS="${PSSH_OPTS} ${PSSH_HOSTS} ${MMTESTS_PSSH_OPTIONS} -p $(( VMCOUNT * 2 ))"
 		SSH_TARGET=""   # All we need is already in PSSH_OPTS!
 		SCP_TARGET="~"  # We need just the path(s)"
 	fi
 
-	# If $MMTESTS_PSSH_OUT_DIR contains a valid path, ask `pssh` to create there
+	# If ${MMTESTS_PSSH_OUT_DIR} contains a valid path, ask `pssh` to create there
 	# one file for each VM (name will be like root@<VM_IP>), were we can watch,
 	# live, the output of run-mmtests.sh, from inside each VM. This can be quite
 	# handy, especialy for debugging.
-	if [ -n ${MMTESTS_PSSH_OUTDIR:-} ]; then
-		mkdir -p $MMTESTS_PSSH_OUTDIR
-		PSSH_OPTS+=" -o $MMTESTS_PSSH_OUTDIR"
+	if [ -n "${MMTESTS_PSSH_OUTDIR:-}" ]; then
+		mkdir -p "${MMTESTS_PSSH_OUTDIR}"
+		PSSH_OPTS+=" -o ${MMTESTS_PSSH_OUTDIR}"
 	fi
 
 	teststate_log "vms ready :: $(date +%s)"
@@ -410,26 +411,26 @@ function setup_pssh() {
 
 function deploy_mmtests() {
 	echo Creating archive
-	NAME="$(basename $SCRIPTDIR)"
+	NAME="$(basename "${SCRIPTDIR}")"
 	cd ..
-	tar -czf ${NAME}.tar.gz --exclude=${NAME}/work* --exclude=${NAME}/.git ${NAME} || die Failed to create mmtests archive
-	mv ${NAME}.tar.gz ${NAME}/
-	cd ${NAME}
+	tar -czf "${NAME}".tar.gz --exclude="${NAME}"/work* --exclude="${NAME}"/.git "${NAME}" || die Failed to create mmtests archive
+	mv "${NAME}".tar.gz "${NAME}"/
+	cd "${NAME}"
 
 	# SCP_TARGET is just the path (i.e., '~') where to copy the archive on within
 	# the various VMs, if we have more than 1, or just "root@GUEST_IP:~"
 	echo Uploading and extracting new mmtests
-	$PSCP $PSSH_OPTS ${NAME}.tar.gz $SCP_TARGET || die Failed to upload ${NAME}.tar.gz
+	${PSCP} "${PSSH_OPTS}" "${NAME}".tar.gz "${SCP_TARGET}" || die Failed to upload "${NAME}".tar.gz
 
 	# SSH_TARGET is "", if we have more than 2 VMs and are using `pssh`(and
 	# all the targets are in PSSH_OPTS already) or "root@GUEST_IP", if we have
 	# only one VM.
-	$PSSH $PSSH_OPTS $SSH_TARGET "mkdir -p git-private && rm -rf git-private/${NAME} && tar -C git-private -xf ${NAME}.tar.gz" || die Failed to extract ${NAME}.tar.gz
-	rm ${NAME}.tar.gz
+	${PSSH} "${PSSH_OPTS}" "${SSH_TARGET}" "mkdir -p git-private && rm -rf git-private/${NAME} && tar -C git-private -xf ${NAME}.tar.gz" || die Failed to extract "${NAME}".tar.gz
+	rm "${NAME}".tar.gz
 
 	# We'll be running benchmarks with [P]SSH, without a terminal, etc. We *must*
 	# be absolutely sure that packages are automatically installed.
-	$PSSH $PSSH_OPTS $SSH_TARGET "touch ~/.mmtests-auto-package-install"
+	${PSSH} "${PSSH_OPTS}" "${SSH_TARGET}" "touch ~/.mmtests-auto-package-install"
 }
 
 function tune_host() {
@@ -440,7 +441,7 @@ function tune_host() {
 	if [ "${FORCE_HOST_PERFORMANCE_SETUP:-}" = "yes" ]; then
 		FORCE_HOST_PERFORMANCE_SCALINGGOV_BASE="$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
 		local NOTURBO="/sys/devices/system/cpu/intel_pstate/no_turbo"
-		[ -f $NOTURBO ] && FORCE_HOST_PERFORMANCE_NOTURBO_BASE=$(cat $NOTURBO)
+		[ -f ${NOTURBO} ] && FORCE_HOST_PERFORMANCE_NOTURBO_BASE="$(cat ${NOTURBO})"
 		force_performance_setup || true
 	fi
 }
@@ -448,7 +449,7 @@ function tune_host() {
 function prepare_host_monitors() {
 	# Check host monitors
 	if [ "${FORCE_RUN_MONITOR:-}" != "" ]; then
-		RUN_MONITOR=$FORCE_RUN_MONITOR
+		RUN_MONITOR="${FORCE_RUN_MONITOR}"
 	fi
 	if [ "${RUN_MONITOR:-}" = "no" ] || [ "${HOST_LOGS:-}" != "yes" ]; then
 		# Disable monitor
@@ -469,7 +470,7 @@ function prepare_host_monitors() {
 	STAP_USED=
 	MONITOR_STAP=
 	check_monitor_stap
-	if [ "$STAP_USED" != "" ]; then
+	if [ "${STAP_USED}" != "" ]; then
 		fixup_stap
 	fi
 }
@@ -573,105 +574,105 @@ function prepare_host_monitors() {
 # by putting together some service program.
 #
 function log_state() {
-	echo -ne "$(date +%H:%M:%S) $1"
-	[ "$1" == "test_do" ] && echo -ne "\t"
+	echo -ne "$(date +%H:%M:%S) ${1}"
+	[ "${1}" == "test_do" ] && echo -ne "\t"
 	echo -ne " "
 }
 
 function synchronize_vms() {
-	if [ -n ${MMTESTS_HOST_IP:-} ]; then
-		[ $VMCOUNT -ne 1 ] && echo "TIME     STATE           VMs"
+	if [ -n "${MMTESTS_HOST_IP:-}" ]; then
+		[ ${VMCOUNT} -ne 1 ] && echo "TIME     STATE           VMs"
 		local STATE="mmtests_start"
 		local tokens=0
 		local NCFILE="$(mktemp)"
-		nc ${_NCV:-} -n -4 -l -k $MMTESTS_HOST_IP $MMTESTS_HOST_PORT > $NCFILE &
+		nc ${_NCV:-} -n -4 -l -k "${MMTESTS_HOST_IP}" "${MMTESTS_HOST_PORT}" > "${NCFILE}" &
 		NCPID=$!
 
-		tail -f $NCFILE | while [ "$STATE" != "QUIT" ] && read TOKEN
+		tail -f "${NCFILE}" | while [[ "${STATE}" != "QUIT" ]] && read -r TOKEN
 		do
-			teststate_log "recvd token :: \"$TOKEN\" $(date +%s)"
+			teststate_log "recvd token :: \"${TOKEN}\" $(date +%s)"
 			# With only 1 VM, there is not much to be synched. We just need
 			# to reply with the very same token we receive, in order to
 			# unblock each phase of run-mmtests.sh, inside the VM itself.
-			if [ $VMCOUNT -eq 1 ]; then
-				case "$TOKEN" in
+			if (( VMCOUNT == 1 )); then
+				case "${TOKEN}" in
 					"mmtests_start"|"test_do"|"iteration_begin"|"iteration_end"|"test_done")
-						mmtests_signal_token "$TOKEN" ${GUEST_IP[@]}
-						teststate_log "sent token :: \"$TOKEN\" $(date +%s)"
+						mmtests_signal_token "${TOKEN}" "${GUEST_IP[@]}"
+						teststate_log "sent token :: \"${TOKEN}\" $(date +%s)"
 						;;
 					"mmtests_end")
-						mmtests_signal_token "mmtests_end" ${GUEST_IP[@]}
-						teststate_log "sent token :: \"$TOKEN\" $(date +%s)"
+						mmtests_signal_token "mmtests_end" "${GUEST_IP[@]}"
+						teststate_log "sent token :: \"${TOKEN}\" $(date +%s)"
 						STATE="QUIT"
 						;;
 					*)
-						echo "ERROR: unknown token (\'$TOKEN\') received!"
+						echo "ERROR: unknown token (\'${TOKEN}\') received!"
 						STATE="QUIT"
-						kill $PSSHPID
+						kill ${PSSHPID}
 						;;
 				esac
 			else
-				case "$STATE" in
+				case "${STATE}" in
 					"mmtests_start"|"test_do"|"iteration_begin"|"iteration_end"|"test_done"|"mmtests_end")
-						if [ $tokens -eq 0 ]; then
+						if (( tokens == 0 )); then
 							# DEBUG: not very useful info to print, unless we're debugging
-							#echo "run-kvm --> run-mmtests: state = $STATE"
-							log_state $STATE
-							teststate_log "enter state :: \"$STATE\" $(date +%s)"
-							activity_log "run-kvm: state \"$STATE\""
+							#echo "run-kvm --> run-mmtests: state = ${STATE}"
+							log_state ${STATE}
+							teststate_log "enter state :: \"${STATE}\" $(date +%s)"
+							activity_log "run-kvm: state \"${STATE}\""
 						fi
-						if [ "$TOKEN" != "$STATE" ]; then
-							echo "ERROR: wrong token (\'$TOKEN\') received while in state \'$STATE\'!"
+						if [[ "${TOKEN}" != "${STATE}" ]]; then
+							echo "ERROR: wrong token (\'${TOKEN}\') received while in state \'${STATE}\'!"
 							STATE="QUIT"
-							kill $PSSHPID
+							kill ${PSSHPID}
 						else
 							echo -n 'X'
 							tokens=$(( tokens + 1 ))
 						fi
-						if [ $tokens -eq $VMCOUNT ]; then
+						if (( tokens == VMCOUNT )); then
 							tokens=0
-							if [ "$STATE" = "mmtests_start" ]; then
+							if [[ "${STATE}" == "mmtests_start" ]]; then
 								STATE="test_do"
-							elif [ "$STATE" = "test_do" ] || [ "$STATE" = "iteration_end" ] || [ "$STATE" = "test_done" ]; then
+							elif [[ "${STATE}" == "test_do" || "${STATE}" == "iteration_end" || "${STATE}" = "test_done" ]]; then
 								STATE="test_do2"
-							elif [ "$STATE" = "iteration_begin" ]; then
+							elif [[ "${STATE}" == "iteration_begin" ]]; then
 								STATE="iteration_end"
-							elif [ "$STATE" = "test_done" ]; then
+							elif [[ "${STATE}" == "test_done" ]]; then
 								STATE="test_do2"
-							elif [ "$STATE" = "mmtests_end" ]; then
+							elif [[ "${STATE}" == "mmtests_end" ]]; then
 								STATE="QUIT"
 							fi
 							echo " Done!"
-							activity_log "run-kvm: sending token \"$TOKEN\""
-							mmtests_signal_token "$TOKEN" ${GUEST_IP[@]}
-							teststate_log "sent token :: \"$TOKEN\" $(date +%s)"
+							activity_log "run-kvm: sending token \"${TOKEN}\""
+							mmtests_signal_token "${TOKEN}" "${GUEST_IP[@]}"
+							teststate_log "sent token :: \"${TOKEN}\" $(date +%s)"
 						fi
 						;;
 					"test_do2")
 						tokens=1
-						if [ "$TOKEN" = "test_do" ]; then
+						if [[ "${TOKEN}" == "test_do" ]]; then
 							STATE="test_do"
-						elif [ "$TOKEN" = "test_done" ]; then
+						elif [[ "${TOKEN}" == "test_done" ]]; then
 							STATE="test_done"
-						elif [ "$TOKEN" = "iteration_begin" ]; then
+						elif [[ "${TOKEN}" == "iteration_begin" ]]; then
 							STATE="iteration_begin"
-						elif [ "$TOKEN" = "mmtests_end" ]; then
+						elif [[ "${TOKEN}" == "mmtests_end" ]]; then
 							STATE="mmtests_end"
 						else
-							echo "ERROR: wrong token (\'$TOKEN\') received while in state \'$STATE\'!"
+							echo "ERROR: wrong token (\'${TOKEN}\') received while in state \'${STATE}\'!"
 							STATE="QUIT"
-							kill $PSSHPID
+							kill ${PSSHPID}
 						fi
 						# DEBUG: not very useful info to print, unless we're debugging
-						#echo "run-kvm --> run-mmtests: state = $STATE"
-						log_state $STATE ; echo -ne 'X'
-						teststate_log "enter state :: \"$STATE\" $(date +%s)"
-						activity_log "run-kvm: state \"$STATE\""
+						#echo "run-kvm --> run-mmtests: state = ${STATE}"
+						log_state ${STATE} ; echo -ne 'X'
+						teststate_log "enter state :: \"${STATE}\" $(date +%s)"
+						activity_log "run-kvm: state \"${STATE}\""
 						;;
 					*)
-						echo "ERROR: unknown token (\'$TOKEN\') received!"
+						echo "ERROR: unknown token (\'${TOKEN}\') received!"
 						STATE="QUIT"
-						kill $PSSHPID
+						kill ${PSSHPID}
 						;;
 				esac
 			fi
@@ -679,37 +680,37 @@ function synchronize_vms() {
 		# pipe (and the fact that we run with 'pipefail'). We need to
 		# improve this (e.g., by using a fifo).
 		done || true
-		kill $NCPID || true
-		rm -f $NCFILE
+		kill "${NCPID}" || true
+		rm -f "${NCFILE}"
 	fi
 
 	# Wait for PSSH completion and capture its return value
-	if [ -n "$PSSHPID" ]; then
-		wait $PSSHPID
+	if [ -n "${PSSHPID}" ]; then
+		wait ${PSSHPID}
 		EXIT_CODE=$?
 	fi
 }
 
 function collect_results() {
-	echo Syncing $SHELLPACK_LOG_BASE_SUBDIR
+	echo Syncing "${SHELLPACK_LOG_BASE_SUBDIR}"
 	local v=1
-	for VM in $(tr ',' '\n' <<< "$VMS")
+	for VM in $(tr ',' '\n' <<< "${VMS}")
 	do
 		# TODO: these two can probably be replaced with `pssh` and `pslurp`...
-		ssh $MMTESTS_SSH_CONFIG_OPTIONS root@${GUEST_IP[$v]} "cd git-private/$NAME && tar -czf work-${VM_RUNNAME[$v]}.tar.gz $SHELLPACK_LOG_BASE_SUBDIR" || die Failed to archive $SHELLPACK_LOG_BASE_SUBDIR
-		scp $MMTESTS_SSH_CONFIG_OPTIONS root@${GUEST_IP[$v]}:git-private/$NAME/work-${VM_RUNNAME[$v]}.tar.gz . || die Failed to download work.tar.gz
+		ssh "${MMTESTS_SSH_CONFIG_OPTIONS}" "root@${GUEST_IP[${v}]}" "cd git-private/${NAME} && tar -czf work-${VM_RUNNAME[${v}]}.tar.gz ${SHELLPACK_LOG_BASE_SUBDIR}" || die Failed to archive "${SHELLPACK_LOG_BASE_SUBDIR}"
+		scp "${MMTESTS_SSH_CONFIG_OPTIONS}" "root@${GUEST_IP[${v}]}":git-private/"${NAME}"/work-"${VM_RUNNAME[${v}]}".tar.gz . || die Failed to download work.tar.gz
 
 		# Do not change behavior, file names, etc, if no VM list is specified.
 		# That, in fact, is how currently Marvin works, and we don't want to
 		# break it.
-		local NEW_RUNNAME=$RUNNAME
+		local NEW_RUNNAME=${RUNNAME}
 		if [ "${VMS_LIST:-}" = "yes" ]; then
-			NEW_RUNNAME=${VM_RUNNAME[$v]}
+			NEW_RUNNAME="${VM_RUNNAME[${v}]}"
 		fi
 
 		# Store the results of benchmark named `FOO`, done in VM 'bar' in
 		# a directory called 'bar-FOO.
-		tar --transform="s|$RUNNAME|$NEW_RUNNAME|" -xf work-${VM_RUNNAME[$v]}.tar.gz || die Failed to extract work.tar.gz
+		tar --transform="s|${RUNNAME}|${NEW_RUNNAME}|" -xf work-"${VM_RUNNAME[${v}]}".tar.gz || die Failed to extract work.tar.gz
 		v=$(( v + 1 ))
 	done
 }
@@ -720,10 +721,11 @@ function stop_vms() {
 	else
 		echo "Shutting down the VM(s)"
 		activity_log "run-kvm: Shutoff VMs"
-		kvm-stop --vm $VMS || true
+		kvm-stop --vm "${VMS}"
 		teststate_log "VMs down :: $(date +%s)"
 	fi
 }
+
 
 function execute_tests() {
 	activity_log "run-kvm: Start"
@@ -737,14 +739,14 @@ function execute_tests() {
 
 	# We only collect logs if the '-L' parameter was present.
 	if [ "${HOST_LOGS:-}" = "yes" ]; then
-		export SHELLPACK_LOG=$SHELLPACK_LOG_BASE/$RUNNAME-host/iter-$MMTEST_HOST_ITERATION
+		export SHELLPACK_LOG="${SHELLPACK_LOG_BASE}/${RUNNAME}-host/iter-${MMTEST_HOST_ITERATION}"
 		# Delete old runs
-		rm -rf $SHELLPACK_LOG &>/dev/null
-		mkdir -p $SHELLPACK_LOG
-		export SHELLPACK_ACTIVITY="$SHELLPACK_LOG/tests-activity"
-		export SHELLPACK_LOGFILE="$SHELLPACK_LOG/tests-timestamp"
-		export SHELLPACK_SYSSTATEFILE="$SHELLPACK_LOG/tests-sysstate"
-		rm -f $SHELLPACK_ACTIVITY $SHELLPACK_LOGFILE $SHELLPACK_SYSSTATEFILE
+		rm -rf "${SHELLPACK_LOG}" &>/dev/null
+		mkdir -p "${SHELLPACK_LOG}"
+		export SHELLPACK_ACTIVITY="${SHELLPACK_LOG}/tests-activity"
+		export SHELLPACK_LOGFILE="${SHELLPACK_LOG}/tests-timestamp"
+		export SHELLPACK_SYSSTATEFILE="${SHELLPACK_LOG}/tests-sysstate"
+		rm -f "${SHELLPACK_ACTIVITY}" "${SHELLPACK_LOGFILE}" "${SHELLPACK_SYSSTATEFILE}"
 	fi
 
 	activity_log "run-kvm: Iteration $((MMTEST_HOST_ITERATION+1)) start"
@@ -769,8 +771,12 @@ function execute_tests() {
 	sync
 	start_monitors
 
-	/usr/bin/time -f "time :: $CURRENT_TEST %U user %S system %e elapsed" -o $SHELLPACK_LOG/timestamp \
-		$PSSH $PSSH_OPTS $SSH_TARGET "cd git-private/$NAME && ./run-mmtests.sh ${RUN_ARGS[*]}" &
+	activity_log "run-kvm: begin run-mmtests in VMs"
+	teststate_log "test begin :: $(date +%s)"
+	activity_log "run-kvm: begin ${CURRENT_TEST}"
+
+	/usr/bin/time -f "time :: ${CURRENT_TEST} %U user %S system %e elapsed" -o "${SHELLPACK_LOG}/timestamp" \
+		"${PSSH}" "${PSSH_OPTS}" "${SSH_TARGET}" "cd git-private/${NAME} && ./run-mmtests.sh ${RUN_ARGS[*]}" &
 	PSSHPID=$!
 
 	synchronize_vms
@@ -780,20 +786,20 @@ function execute_tests() {
 
 	sysstate_log_proc_files "end"
 
-	echo "Execution in guest(s) ended. Status $EXIT_CODE"
-	activity_log "run-kvm: test end :: $(date +%s) $EXIT_CODE"
-	teststate_log "test end :: $(date +%s) $EXIT_CODE"
-	if [[ -n "${SHELLPACK_LOG}" && -f "$SHELLPACK_LOG/timestamp" ]]; then
-		teststate_log "$(< $SHELLPACK_LOG/timestamp)"
-		rm $SHELLPACK_LOG/timestamp
+	echo "Execution in guest(s) ended. Status ${EXIT_CODE}"
+	activity_log "run-kvm: test end :: $(date +%s) ${EXIT_CODE}"
+	teststate_log "test end :: $(date +%s) ${EXIT_CODE}"
+	if [[ -n "${SHELLPACK_LOG}" && -f "${SHELLPACK_LOG}/timestamp" ]]; then
+		teststate_log "$(< "${SHELLPACK_LOG}/timestamp")"
+		rm "${SHELLPACK_LOG}/timestamp"
 	fi
 
 	teststate_log "finish :: $(date +%s)"
 
 	if [ "${HOST_LOGS:-}" = "yes" ]; then
-		dmesg > $SHELLPACK_LOG/dmesg
-		gzip -f $SHELLPACK_LOG/dmesg
-		gzip -f $SHELLPACK_SYSSTATEFILE
+		dmesg > "${SHELLPACK_LOG}/dmesg"
+		gzip -f "${SHELLPACK_LOG}/dmesg"
+		gzip -f "${SHELLPACK_SYSSTATEFILE}"
 	fi
 
 	activity_log "run-kvm: Iteration $((MMTEST_HOST_ITERATION+1)) end"
@@ -802,7 +808,7 @@ function execute_tests() {
 	stop_vms
 
 	activity_log "run-kvm: End"
-	teststate_log "status :: $EXIT_CODE"
+	teststate_log "status :: ${EXIT_CODE}"
 }
 
 function cleanup() {
@@ -811,9 +817,9 @@ function cleanup() {
 	EXIT_CODE="${EXIT_CODE:-$?}"
 
 	# Kill dangling sync processes if interrupted
-	[ -n "$NCPID" ] && kill $NCPID 2>/dev/null || true
+	[[ -n "${NCPID:-}" ]] && kill "${NCPID}" 2>/dev/null || true
 
-	if [ "$PIP_UNINSTALL_PSSH" = "yes" ]; then
+	if [[ "${PIP_UNINSTALL_PSSH}" == "yes" ]]; then
 		pip uninstall -y pssh || true
 	fi
 
@@ -821,10 +827,10 @@ function cleanup() {
 	shutdown_tuned
 
 	if [ "${FORCE_HOST_PERFORMANCE_SETUP:-}" = "yes" ] && [ -n "${FORCE_HOST_PERFORMANCE_SCALINGGOV_BASE:-}" ]; then
-		restore_performance_setup $FORCE_HOST_PERFORMANCE_SCALINGGOV_BASE ${FORCE_HOST_PERFORMANCE_NOTURBO_BASE:-} || true
+		restore_performance_setup "${FORCE_HOST_PERFORMANCE_SCALINGGOV_BASE}" "${FORCE_HOST_PERFORMANCE_NOTURBO_BASE:-}" || true
 	fi
 
-	command exit $EXIT_CODE
+	command exit "${EXIT_CODE}"
 }
 
 function main() {

@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck enable=require-variable-braces
 #
 # Waits until a particular machine is running ssh and is available
 # Author: Mel Gorman <mgorman@suse.de>
@@ -6,8 +7,8 @@
 
 EXPECT_SCRIPT=
 function cleanup() {
-	if [ "$EXPECT_SCRIPT" != "" ]; then
-		rm -f $EXPECT_SCRIPT
+	if [ "${EXPECT_SCRIPT}" != "" ]; then
+		rm -f "${EXPECT_SCRIPT}"
 	fi
 }
 trap cleanup EXIT
@@ -20,8 +21,8 @@ MACHINE=$1
 RESET=$2
 
 EXPECT_SCRIPT="$(mktemp)"
-cat > $EXPECT_SCRIPT <<EOF
-spawn ssh -o PubkeyAuthentication=no root@$MACHINE echo marvin-ping
+cat > "${EXPECT_SCRIPT}" <<EOF
+spawn ssh -o PubkeyAuthentication=no root@${MACHINE} echo marvin-ping
 expect {
 	marvin-ping		{ exit   1 }
 	"assword"		{ exit   1 }
@@ -29,44 +30,44 @@ expect {
 }
 EOF
 
-expect -f $EXPECT_SCRIPT 2>&1 > /dev/null
+expect -f "${EXPECT_SCRIPT}" 2>&1 > /dev/null
 RET=$?
-if [ $RET -eq 1 ]; then
-	rm $EXPECT_SCRIPT
-	exit $RET
+if [ ${RET} -eq 1 ]; then
+	rm "${EXPECT_SCRIPT}"
+	exit ${RET}
 fi
 
 COUNT=0
 
-if [ "$RESET" != "quiet" ]; then
-	echo -n "Waiting for ssh to be available at $MACHINE:22"
-	if [ "$RESET" = "reset" ]; then
+if [ "${RESET}" != "quiet" ]; then
+	echo -n "Waiting for ssh to be available at ${MACHINE}:22"
+	if [ "${RESET}" = "reset" ]; then
 		echo -n " with reset"
 	fi
 fi
-while [ $RET -ne 1 ]; do
-        expect -f $EXPECT_SCRIPT 2>&1 > /dev/null
+while [ "${RET}" -ne 1 ]; do
+        expect -f "${EXPECT_SCRIPT}" 2>&1 > /dev/null
         RET=$?
-	if [ "$RESET" != "quiet" ]; then
+	if [ "${RESET}" != "quiet" ]; then
         	echo -n .
 	fi
         sleep 30
 	COUNT=$((COUNT+1))
-	if [ $COUNT -ge 400 -a $((COUNT%50)) -eq 0 ]; then
-		if [ "$RESET" = "reset" ]; then
+	if [ ${COUNT} -ge 400 -a $((COUNT%50)) -eq 0 ]; then
+		if [ "${RESET}" = "reset" ]; then
 			echo
 			echo Power resetting
-			power-ctrl -s $MACHINE off
+			power-ctrl -s "${MACHINE}" off
 			sleep 30
-			power-ctrl -s $MACHINE on
+			power-ctrl -s "${MACHINE}" on
 		fi
-		if [ "$RESET" = "kvm-start" ]; then
+		if [ "${RESET}" = "kvm-start" ]; then
 			echo
 			echo Attempting kvm-start
 			kvm-start
 		fi
 	fi
 done
-rm $EXPECT_SCRIPT
+rm "${EXPECT_SCRIPT}"
 echo
-exit $RET
+exit "${RET}"
