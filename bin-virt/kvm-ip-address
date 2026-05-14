@@ -1,5 +1,5 @@
 #!/bin/bash
-# shellcheck enable=SC2006
+# shellcheck enable=require-variable-braces
 #
 # This script obtains the IP address of a marvin-based KVM instance. It can
 # optionally timeout
@@ -13,7 +13,7 @@
 #
 # Mel Gorman <mgorman@suse.com> 2016
 
-if [ "$MARVIN_KVM_DOMAIN" = "" ]; then
+if [ "${MARVIN_KVM_DOMAIN}" = "" ]; then
 	export MARVIN_KVM_DOMAIN="marvin-mmtests"
 fi
 
@@ -22,7 +22,7 @@ if [ "$1" = "--vm" ]; then
 	VM="$1"
 	shift
 else
-	VM=$MARVIN_KVM_DOMAIN
+	VM=${MARVIN_KVM_DOMAIN}
 fi
 
 GUEST_IP=
@@ -34,48 +34,48 @@ lookup_state() {
 	local _state="REACHABLE"
 
 	if [ "$(which ip 2> /dev/null)" != "" ]; then
-		_state=$(ip n show | grep ^$_ip | awk '{print $NF}')
+		_state=$(ip n show | grep ^"${_ip}" | awk '{print $NF}')
 	fi
-	echo $_state
+	echo "${_state}"
 }
 
-while [ "$GUEST_IP" = "" ]; do
-	if [ "$TIMEOUT" != "" ]; then
+while [ "${GUEST_IP}" = "" ]; do
+	if [ "${TIMEOUT}" != "" ]; then
 		CURRENTTIME="$(date +%s)"
 		RUNNING=$((CURRENTTIME-STARTTIME))
-		if [ $RUNNING -gt $TIMEOUT ]; then
-			echo "ERROR: Timeout exceeded for discovering $VM IP address" >&2
+		if [ ${RUNNING} -gt "${TIMEOUT}" ]; then
+			echo "ERROR: Timeout exceeded for discovering ${VM} IP address" >&2
 			exit -1
 		fi
 	fi
 
-	if [ "$(virsh dumpxml $VM | grep "mac addres")" = "" ]; then
+	if [ "$(virsh dumpxml "${VM}" | grep "mac addres")" = "" ]; then
 		sleep 10
 		continue
 	fi
 
 	# There could be more than one NIC in the VM
-	for MAC_ADDRESS in $(virsh dumpxml $VM | grep "mac address" | sed "s/.*'\(.*\)'.*/\1/g"); do
+	for MAC_ADDRESS in $(virsh dumpxml "${VM}" | grep "mac address" | sed "s/.*'\(.*\)'.*/\1/g"); do
 		if [ "$(which arp 2> /dev/null)" != "" ]; then
-			GUEST_IP=$(arp -an | grep "$MAC_ADDRESS" | awk '{ gsub(/[\(\)]/,"",$2); print $2 }')
+			GUEST_IP=$(arp -an | grep "${MAC_ADDRESS}" | awk '{ gsub(/[\(\)]/,"",$2); print $2 }')
 		else
-			GUEST_IP=$(ip n show | grep "$MAC_ADDRESS" | awk '{print $1}')
+			GUEST_IP=$(ip n show | grep "${MAC_ADDRESS}" | awk '{print $1}')
 		fi
 
 		# We may have got more than one address. Go over the list and
 		# pick the first that answers to a ping.
-		for IP in $GUEST_IP ; do
-			if ping -c 1 -q $IP &> /dev/null ; then
-				while [ "$(lookup_state $IP)" != "REACHABLE" ]; do
+		for IP in ${GUEST_IP} ; do
+			if ping -c 1 -q "${IP}" &> /dev/null ; then
+				while [ "$(lookup_state "${IP}")" != "REACHABLE" ]; do
 					sleep 1
 				done
-				echo $IP
+				echo "${IP}"
 				exit 0
 			fi
 		done
 	done
 
-	if [ "$GUEST_IP" = "" ]; then
+	if [ "${GUEST_IP}" = "" ]; then
 		sleep 10
 	fi
 done
