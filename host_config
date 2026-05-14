@@ -5,8 +5,8 @@
 #        *MUST* BE DEFINED (SO, UNCOMMENT THE LINE BELOW AND SET IT
 #        TO THE PROPER VALUE).***
 #
-#export MMTESTS_HOST_IP="192.168.122.1"
-#export AUTO_PACKAGE_INSTALL="yes"
+export MMTESTS_HOST_IP="192.168.122.1"
+export AUTO_PACKAGE_INSTALL="yes"
 
 # SSH options, in the sshd_config(5) format (see `-o` in `man ssh`). MMTests
 # already uses `-o StrictHostKeyChecking=no` (and a few others, e.g., for
@@ -171,7 +171,7 @@
 #export MMTESTS_TUNED_PROFILE="latency-performance"
 
 # XXX
-export MMTESTS_UPDATE_BUILD_FLAGS=yes
+#export MMTESTS_UPDATE_BUILD_FLAGS=yes
 
 # List of monitors for the host
 export RUN_MONITOR=yes
