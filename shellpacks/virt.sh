@@ -714,6 +714,74 @@ function libvirt::vm_deploy_wait() {
 	return "${SHELLPACK_SUCCESS}"
 }
 
+# Pins the current dynamic IP of a VM to a static DHCP reservation in libvirt.
+# This prevents IP shifting during long benchmarks due to DHCP lease starvation.
+# Parameters: <vm_name> [network_name]
+function libvirt::pin_vm_ip() {
+	local vm="${1}"
+	local net="${2:-default}"
+
+	local mac
+	mac=$(virsh dumpxml "${vm}" 2>/dev/null | xmllint --xpath 'string(//interface[@type="network"]/mac/@address)' - 2>/dev/null || true)
+
+	if [[ -z "${mac}" ]]; then
+		echo "WARNING: Could not find network MAC address for VM ${vm}. Skipping IP pin." >&2
+		return "${SHELLPACK_SUCCESS}" # Soft fail, don't crash the orchestrator
+	fi
+	local ip
+	ip=$(libvirt::vm_ip_address "${vm}" 60)
+	if [[ -z "${ip}" ]]; then
+		echo "WARNING: Could not determine current IP for VM ${vm}. Skipping IP pin." >&2
+		return "${SHELLPACK_SUCCESS}"
+	fi
+
+	# Check if a static binding already exists for this MAC (Idempotency)
+	if virsh net-dumpxml "${net}" 2>/dev/null | grep -qi "mac='${mac}'"; then
+		echo "Static IP binding for ${vm} (${ip}) already exists."
+		return "${SHELLPACK_SUCCESS}"
+	fi
+
+	echo "Pinning current IP (${ip}) to MAC (${mac}) for VM ${vm}..."
+
+	# Add the static lease to Libvirt's dnsmasq
+	# --live applies it to the running dnsmasq instance.
+	# --config saves it to the XML for persistence across host reboots.
+	virsh net-update "${net}" add ip-dhcp-host \
+		"<host mac='${mac}' name='${vm}' ip='${ip}'/>" \
+		--live --config >/dev/null 2>&1 || {
+		echo "ERROR: Failed to inject static DHCP binding for ${vm}" >&2
+		return "${SHELLPACK_ERROR}"
+	}
+
+	return "${SHELLPACK_SUCCESS}"
+}
+
+# Removes a static IP and hostname binding from a libvirt network.
+# Fails softly to ensure teardown sequences are not interrupted.
+# Parameters: <network_name> <mac_address> <ip_address> <vm_name>
+function libvirt::unpin_vm_ip() {
+	local net="${1}"
+	local mac="${2}"
+	local ip="${3}"
+	local vm="${4}"
+
+	if [[ -z "${net}" || -z "${mac}" || -z "${ip}" || -z "${vm}" ]]; then
+		echo "ERROR: Missing arguments for libvirt::unpin_vm_ip" >&2
+		return 0 # Soft fail for cleanup routines
+	fi
+
+	local xml_payload="<host mac='${mac}' name='${vm}' ip='${ip}'/>"
+
+	# Attempt to remove the lease from live and config states
+	virsh net-update "${net}" delete ip-dhcp-host "${xml_payload}" --live --config >/dev/null 2>&1 || {
+		echo "WARNING: Failed to remove static lease for ${vm} (${ip}) from network '${net}'. It might not exist." >&2
+		return 0
+	}
+
+	echo "INFO: Successfully removed static IP binding for ${vm}."
+	return 0
+}
+
 # Legacy orchestrator: performs infinite polling with a threshold-based hard-reset policy.
 # Parameters: <VM_IP_or_hostname> [reset_mode]
 function vm_wait_ssh_with_reset() {

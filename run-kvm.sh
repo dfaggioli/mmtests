@@ -476,6 +476,8 @@ function prepare_and_start_vms() {
 
 			GUEST_IP[v]=$(libvirt::vm_ip_address "${VMS[v]}");
 
+			libvirt::pin_vm_ip "${VMS[v]}" || echo "WARNING: Failed to pin IP ${GUEST_IP[v]} for ${VMS[v]}"
+
 			if [[ "${host_logs}" == "yes" ]]; then
 				virsh dumpxml ${VMS[v]} > "${SHELLPACK_LOG}/${VMS[v]}".xml
 			fi
@@ -822,6 +824,21 @@ function collect_results() {
 }
 
 function stop_vms() {
+	local v mac
+	for v in "${!VMS[@]}"; do
+		if [[ -n "${GUEST_IP[v]:-}" ]]; then
+			# Discovers the MAC address directly from the active VM interface
+			mac=$(virsh domiflist "${VMS[v]}" 2>/dev/null | awk 'NR>2 && $5!="" {print $5; exit}')
+			
+			if [[ -n "${mac}" ]]; then
+				# Assumes 'default' network. Replace with a variable if your framework supports custom networks.
+				libvirt::unpin_vm_ip "default" "${mac}" "${GUEST_IP[v]}" "${VMS[v]}"
+			else
+				echo "WARNING: Could not find MAC address for ${VMS[v]}, skipping IP unpin." >&2
+			fi
+		fi
+	done
+
 	if [ -n "${MMTESTS_VMS_IP:-}" ]; then
 		echo "Leaving the VM(s) up"
 	else
