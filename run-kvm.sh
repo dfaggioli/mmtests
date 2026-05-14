@@ -144,8 +144,6 @@ function prologue() {
 	export CURRENT_TEST="monitor"
 
 	# Global states, for trap safety
-	PIP_UNINSTALL_PSSH="no"
-	PSSHPID=""
 	NCPID=""
 	EXIT_CODE=""
 }
@@ -192,32 +190,19 @@ function parse_config() {
 		VMS="${MARVIN_KVM_DOMAIN}"
 	fi
 
-	MMTESTS_SSH_CONFIG_OPTIONS+="-o StrictHostKeyChecking=no -o ForwardAgent=no -o ForwardX11=no"
-	MMTESTS_PSSH_OPTIONS+=" -t 0 $(echo "${MMTESTS_SSH_CONFIG_OPTIONS}"|sed s/-o/-O/g)"
+	MMTESTS_SSH_OPTIONS=" ${MMTESTS_SSH_CONFIG_OPTIONS:-} -o StrictHostKeyChecking=no -o ForwardAgent=no -o ForwardX11=no"
 }
 
 function prepare_host() {
-	# If MMTESTS_HOST_IP is defined (e.g., in the configs we've imported), it
-	# means we are running as a "standalone virtualization bench suite". And we
-	# need to install some packages to be able to do so.
-	#
-	# We also need to check if, for instance, MMTESTS_HOST_IP is defined in
-	# whatever we are using as host config file. If it is, it must be there in
-	# the guests' configs as well, or we'll get stuck (because it's the fact
-	# that this var exists that tells guests that they need to contact the host
-	# for coordination of the test runs). So, we add it (and while there, add
-	# AUTO_PACKAGE_INSTALL too).
+	# If MMTESTS_HOST_IP is defined, we are running as a standalone
+	# virtualization bench suite and we need to install some additional packages.
 	if [ -n "${MMTESTS_HOST_IP:-}" ]; then
 		install-depends expect netcat-openbsd iputils
 
-		install-depends gnu_parallel
-		if ! command -v parallel &> /dev/null ; then
-			echo "WARNING: No package for GNU parallel found. We can work without it, but it would be better to have it."
-			echo "If you are on [open]SUSE, you can try this (but no guarantees it's still there!):"
-			echo "  zypper ar https://download.opensuse.org/repositories/home:/tange/openSUSE_Tumbleweed/home:tange.repo"
-			echo "  zypper ref && zypper in parallel"
-		fi
-
+		# We also need to check that MMTESTS_HOST_IP is defined in the
+		# guests' configs too, or we'll get stuck (as guests tells from
+		# this that they need to contact the host for coordination).
+		# So, we add it (and while there, AUTO_PACKAGE_INSTALL too).
 		local c
 		for c in "${MMTESTS_CONFIGS[@]}"; do
 			if [ "$(grep MMTESTS_HOST_IP "${c}")" = "" ] ; then
@@ -283,8 +268,6 @@ function prepare_and_start_vms() {
 		do
 			echo "checking VM: ${VM} at IP: ${GUEST_IP[${v}]}"
 			wait_ssh_available "${GUEST_IP[${v}]}"
-			SSH_HOST="root@${GUEST_IP[${v}]}"
-			PSSH_HOSTS+=" -H ${SSH_HOST}"
 			echo "VM ready: ${VM} IP: ${GUEST_IP[${v}]}"
 			firewall_whitelist_ip "${GUEST_IP[${v}]}"
 			activity_log "run-kvm: VM ${VM} IP ${GUEST_IP[${v}]}"
@@ -316,8 +299,6 @@ function prepare_and_start_vms() {
 		do
 			GUEST_IP[${v}]=$(kvm-ip-address --vm "${VM}")
 			echo "VM ready: ${VM} IP: ${GUEST_IP[${v}]}"
-			SSH_HOST="root@${GUEST_IP[${v}]}"
-			PSSH_HOSTS+=" -H ${SSH_HOST}"
 			if [ "${HOST_LOGS:-}" = "yes" ]; then
 				virsh dumpxml "${VM}" > "${SHELLPACK_LOG}/${VM}".xml
 			fi
@@ -341,96 +322,45 @@ function prepare_and_start_vms() {
 	[ ${VMCOUNT} -lt 1 ] && die "ERROR: No VM specified?"
 }
 
-function setup_pssh() {
-	if [ ${VMCOUNT} -eq 1 ]; then
-		PSCP=scp
-		PSSH=ssh
-		# Of course, using ${SSH_HOST} like this makes sense only because we know
-		# that there is only 1 VM.
-		SSH_TARGET="${SSH_HOST}"
-		SCP_TARGET="${SSH_TARGET}:~"
-		PSSH_OPTS="${MMTESTS_SSH_CONFIG_OPTIONS}"
-	elif [ -z "${MMTESTS_HOST_IP:-}" ]; then
-		# When using more than 1 VMs, we need MMTESTS_HOST_IP to be explicitly
-		# defined, so that we know that we should follow the lockstep protocol,
-		# and not just let it/them run.
-		#
-		# TODO: If more than 1 VM is used, and MMTESTS_HOST_IP is not defined, we
-		# can try to automatically figure it out, and let things proceed...
-		die "ERROR: When using more than 1 VM, define MMTESTS_HOST_IP!"
-	else
-		# With more than 2 VMs, we need parallel SSH/SCP. However, the package
-		# may not be available in all distros. Or maybe it is, but the programs
-		# have different names, like it is, e.g., in openSUSE and in Debian. So,
-		# let's handle things in a bit of a special way...
-		install-depends pssh
-		PSCP=pscp ; PSSH=pssh
-		# If install-depends worked, either pscp or parallel-scp should be available now
-		if command -v parallel-scp &> /dev/null; then
-			PSCP=parallel-scp
-			PSSH=parallel-ssh
-		elif ! command -v pscp &> /dev/null; then
-			# Ok, this means it's not available in packages!
-			# But we *need* it, so let's try some extreme measures...
-			if [ "${AUTO_PACKAGE_INSTALL:-}" != "yes" ] && [ ! -e "${HOME}/.mmtests-auto-package-install" ]; then
-				echo -n "MMTests would like to try to install PSSH from pip (https://pypi.org/project/pssh/). Can we proceed (YES/no/)? "
-				read -r answer
-			else
-				answer="yes"
-			fi
-			case "${answer}" in
-				y | Y | Yes | yes | YES)
-					install-depends python3-pip
-					pip install git+https://github.com/lilydjwg/pssh
-					PIP_UNINSTALL_PSSH="yes"
-					;;
-				*)
-					die "ERROR: We cannot continue without pssh/pscp!"
-					;;
-			esac
-		fi
-		command -v ${PSCP} &> /dev/null || die "ERROR: pscp not available. Cannot continue!"
-		command -v ${PSSH} &> /dev/null || die "pscp is there, but not pssh? Too weird to continue!"
+function setup_parallel() {
+	# Try installing the package, but we have a copy in bin/, as a fallback.
+	# For refreshing it:
+	#   curl -sL "https://git.savannah.gnu.org/cgit/parallel.git/plain/src/parallel" -o bin/parallel
+	#   chmod +x bin/parallel
+	install-depends gnu_parallel || true
+	# Make sure parallel works, even if it comes from our local copy in bin/
+	mkdir -p ~/.parallel && touch ~/.parallel/will-cite
 
-		PSSH_OPTS="${PSSH_OPTS} ${PSSH_HOSTS} ${MMTESTS_PSSH_OPTIONS} -p $(( VMCOUNT * 2 ))"
-		SSH_TARGET=""   # All we need is already in PSSH_OPTS!
-		SCP_TARGET="~"  # We need just the path(s)"
-	fi
+	# Create a clean array of SSH targets for GNU parallel
+	declare -ga TARGET_HOSTS=()
+	for (( v=1; v<=VMCOUNT; v++ )); do
+		TARGET_HOSTS+=( "root@${GUEST_IP[${v}]}" )
+	done
 
-	# If ${MMTESTS_PSSH_OUT_DIR} contains a valid path, ask `pssh` to create there
-	# one file for each VM (name will be like root@<VM_IP>), were we can watch,
-	# live, the output of run-mmtests.sh, from inside each VM. This can be quite
-	# handy, especialy for debugging.
-	if [ -n "${MMTESTS_PSSH_OUTDIR:-}" ]; then
-		mkdir -p "${MMTESTS_PSSH_OUTDIR}"
-		PSSH_OPTS+=" -o ${MMTESTS_PSSH_OUTDIR}"
+	if [[ -n "${MMTESTS_PARALLEL_OUTDIR:-}" ]]; then
+		mkdir -p "${MMTESTS_PARALLEL_OUTDIR}"
 	fi
 
 	teststate_log "vms ready :: $(date +%s)"
 }
 
 function deploy_mmtests() {
-	echo "Synchronizing mmtests directory to ${VMCOUNT} VMs..."
+	echo "Synchronizing mmtests directory to ${VMCOUNT} VMs via parallel rsync..."
 
 	NAME="$(basename "${SCRIPTDIR}")"
 	cd ..
 
-	# SSH_TARGET is "", if we have more than 2 VMs and are using `pssh`(and
-	# all the targets are in PSSH_OPTS already) or "root@GUEST_IP", if we have
-	# only one VM.
-	${PSSH} "${PSSH_OPTS}" "${SSH_TARGET}" "mkdir -p git-private/${NAME}" || die "Failed to create target directory"
-	export RSYNC_RSH="ssh ${MMTESTS_SSH_CONFIG_OPTIONS}"
+	# Create target directories in parallel
+	parallel -j "${VMCOUNT}" ssh ${MMTESTS_SSH_OPTIONS} {} "'mkdir -p git-private/${NAME}'" ::: "${TARGET_HOSTS[@]}" || die "Failed to create remote dirs"
 
-	if (( VMCOUNT == 1 )); then
-		rsync -az --delete --exclude='work*' --exclude='.git' --exclude '*.tar.gz' "${NAME}/" "root@${GUEST_IP[1]}:git-private/${NAME}/" || die "Failed to rsync ${NAME}"
-	else
-		# Feed the GUEST_IP array (which already contains all IPs) to GNU parallel
-		parallel -j $VMCOUNT rsync -az --delete --exclude='work*' --exclude='.git' --exclude '*.tar.gz' "${NAME}/" "root@{}:git-private/${NAME}/" ::: "${GUEST_IP[@]}" || die "Failed to rsync ${NAME} (via parallel)"
-	fi
+	# Rsync source code in parallel
+	export RSYNC_RSH="ssh ${MMTESTS_SSH_OPTIONS}"
+	parallel -j "${VMCOUNT}" rsync -az --delete "--exclude='work*'" "--exclude='.git'" "--exclude '*.tar.gz'" "${NAME}/" "{}:git-private/${NAME}/" ::: "${TARGET_HOSTS[@]}" || die "Failed to rsync ${NAME} (via parallel)"
 
-	# We'll be running benchmarks with [P]SSH, without a terminal, etc. We *must*
-	# be absolutely sure that packages are automatically installed.
-	${PSSH} "${PSSH_OPTS}" "${SSH_TARGET}" "touch ~/.mmtests-auto-package-install"
+	parallel -j "${VMCOUNT}" ssh ${MMTESTS_SSH_OPTIONS} {} "'cd git-private/${NAME} && rm -rf work/log/* work-*.tar.gz'" ::: "${TARGET_HOSTS[@]}" || true
+
+	# Ensure automatic package installation flag is set
+	parallel -j "${VMCOUNT}" ssh ${MMTESTS_SSH_OPTIONS} {} "'touch ~/.mmtests-auto-package-install'" ::: "${TARGET_HOSTS[@]}" || die "Failed to set auto-package install flag"
 
 	cd "${NAME}"
 }
@@ -610,7 +540,7 @@ function synchronize_vms() {
 					*)
 						echo "ERROR: unknown token (\'${TOKEN}\') received!"
 						STATE="QUIT"
-						kill ${PSSHPID}
+						[[ -n "${PARALLEL_PID:-}" ]] && kill "${PARALLEL_PID}"
 						;;
 				esac
 			else
@@ -626,7 +556,7 @@ function synchronize_vms() {
 						if [[ "${TOKEN}" != "${STATE}" ]]; then
 							echo "ERROR: wrong token (\'${TOKEN}\') received while in state \'${STATE}\'!"
 							STATE="QUIT"
-							kill ${PSSHPID}
+							[[ -n "${PARALLEL_PID:-}" ]] && kill "${PARALLEL_PID}"
 						else
 							echo -n 'X'
 							tokens=$(( tokens + 1 ))
@@ -663,7 +593,7 @@ function synchronize_vms() {
 						else
 							echo "ERROR: wrong token (\'${TOKEN}\') received while in state \'${STATE}\'!"
 							STATE="QUIT"
-							kill ${PSSHPID}
+							[[ -n "${PARALLEL_PID:-}" ]] && kill "${PARALLEL_PID}"
 						fi
 						# DEBUG: not very useful info to print, unless we're debugging
 						#echo "run-kvm --> run-mmtests: state = ${STATE}"
@@ -674,7 +604,7 @@ function synchronize_vms() {
 					*)
 						echo "ERROR: unknown token (\'${TOKEN}\') received!"
 						STATE="QUIT"
-						kill ${PSSHPID}
+						[[ -n "${PARALLEL_PID:-}" ]] && kill "${PARALLEL_PID}"
 						;;
 				esac
 			fi
@@ -686,9 +616,9 @@ function synchronize_vms() {
 		rm -f "${NCFILE}"
 	fi
 
-	# Wait for PSSH completion and capture its return value
-	if [ -n "${PSSHPID}" ]; then
-		wait ${PSSHPID}
+	# Wait for GNU parallel completion and capture its return value
+	if [[ -n "${PARALLEL_PID}" ]]; then
+		wait "${PARALLEL_PID}"
 		EXIT_CODE=$?
 	fi
 }
@@ -698,9 +628,9 @@ function collect_results() {
 	local v=1
 	for VM in $(tr ',' '\n' <<< "${VMS}")
 	do
-		# TODO: these two can probably be replaced with `pssh` and `pslurp`...
-		ssh "${MMTESTS_SSH_CONFIG_OPTIONS}" "root@${GUEST_IP[${v}]}" "cd git-private/${NAME} && tar -czf work-${VM_RUNNAME[${v}]}.tar.gz ${SHELLPACK_LOG_BASE_SUBDIR}" || die Failed to archive "${SHELLPACK_LOG_BASE_SUBDIR}"
-		scp "${MMTESTS_SSH_CONFIG_OPTIONS}" "root@${GUEST_IP[${v}]}":git-private/"${NAME}"/work-"${VM_RUNNAME[${v}]}".tar.gz . || die Failed to download work.tar.gz
+		# TODO: these two can probably be replaced with GNU parallel and rsync as well in the future
+		ssh "${MMTESTS_SSH_OPTIONS}" "root@${GUEST_IP[${v}]}" "cd git-private/${NAME} && tar -czf work-${VM_RUNNAME[${v}]}.tar.gz ${SHELLPACK_LOG_BASE_SUBDIR}" || die Failed to archive "${SHELLPACK_LOG_BASE_SUBDIR}"
+		scp "${MMTESTS_SSH_OPTIONS}" "root@${GUEST_IP[${v}]}:git-private/${NAME}/work-${VM_RUNNAME[${v}]}.tar.gz ." || die Failed to download work.tar.gz
 
 		# Do not change behavior, file names, etc, if no VM list is specified.
 		# That, in fact, is how currently Marvin works, and we don't want to
@@ -762,6 +692,7 @@ function execute_tests() {
 	collect_sysconfig_info
 
 	prepare_and_start_vms
+	setup_parallel
 	deploy_mmtests
 
 	echo "Executing mmtests in $VMCOUNT guest(s)"
@@ -777,9 +708,14 @@ function execute_tests() {
 	teststate_log "test begin :: $(date +%s)"
 	activity_log "run-kvm: begin ${CURRENT_TEST}"
 
+	local parallel_cmd="ssh ${MMTESTS_SSH_OPTIONS} {} 'cd git-private/${NAME} && ./run-mmtests.sh ${RUN_ARGS[*]}'"
+	if [[ -n "${MMTESTS_PARALLEL_OUTDIR:-}" ]]; then
+		parallel_cmd="${parallel_cmd} > ${MMTESTS_PARALLEL_OUTDIR}/{}.log 2>&1"
+	fi
+
 	/usr/bin/time -f "time :: ${CURRENT_TEST} %U user %S system %e elapsed" -o "${SHELLPACK_LOG}/timestamp" \
-		"${PSSH}" "${PSSH_OPTS}" "${SSH_TARGET}" "cd git-private/${NAME} && ./run-mmtests.sh ${RUN_ARGS[*]}" &
-	PSSHPID=$!
+		parallel --line-buffer -j "${VMCOUNT}" "${parallel_cmd}" ::: "${TARGET_HOSTS[@]}" &
+	PARALLEL_PID=$!
 
 	synchronize_vms
 
@@ -821,10 +757,6 @@ function cleanup() {
 	# Kill dangling sync processes if interrupted
 	[[ -n "${NCPID:-}" ]] && kill "${NCPID}" 2>/dev/null || true
 
-	if [[ "${PIP_UNINSTALL_PSSH}" == "yes" ]]; then
-		pip uninstall -y pssh || true
-	fi
-
 	shutdown_numad
 	shutdown_tuned
 
@@ -844,7 +776,6 @@ function main() {
 	parse_config
 	prepare_host
 	tune_host
-	setup_pssh
 	prepare_host_monitors
 	execute_tests
 

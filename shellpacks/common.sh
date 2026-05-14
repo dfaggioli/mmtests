@@ -645,10 +645,10 @@ function mmtests_activity() {
 function mmtests_send_token() {
 	while :
 	do
-		nc $_NCV -4 -z $1 $2
+		nc $_NCV -4 -z $1 $2 2> /dev/null
 		if [ $? -eq 0 ]; then
 			# Connection can be established, let's send!
-			echo "$3" | nc $_NCV -n -4 -q 0 $1 $2
+			echo "$3" | nc $_NCV -n -4 -q 0 $1 $2 2> /dev/null
 			if [ $? -eq 0 ]; then
 				break
 			fi
