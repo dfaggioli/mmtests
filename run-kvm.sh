@@ -592,6 +592,13 @@ function prepare_and_start_vms() {
 			wait "${pid}" || die "FATAL: Offline hook failed during final sync"
 		done
 
+		[[ "${host_logs}" == "yes" ]] &&
+			vm_xml_backup_dir="${SHELLPACK_LOG}" ||
+			vm_xml_backup_dir="/tmp/mmtests_vms_bckup"
+		libvirt::backup_vms_definitions "${VMS[@]}"
+
+		libvirt::tune_vms_offline "${VMS[@]}"
+
 		# LEGACY: booting the current host kernel in VMs is, currently, only
 		# supported if we are running inside Marvin, and with only one VM.
 		if [[ "${keep_kernel:-}" != "yes" ]] &&
@@ -612,10 +619,6 @@ function prepare_and_start_vms() {
 			GUEST_IP[v]=$(libvirt::vm_ip_address "${VMS[v]}");
 
 			libvirt::pin_vm_ip "${VMS[v]}" || echo "WARNING: Failed to pin IP ${GUEST_IP[v]} for ${VMS[v]}"
-
-			if [[ "${host_logs}" == "yes" ]]; then
-				virsh dumpxml ${VMS[v]} > "${SHELLPACK_LOG}/${VMS[v]}".xml
-			fi
 
 			echo "VM ready: ${VMS[v]} IP: ${GUEST_IP[v]}"
 			activity_log "run-kvm: VM ${VMS[v]} IP ${GUEST_IP[v]}"
@@ -1184,6 +1187,8 @@ function cleanup() {
 	restore_performance_setup "${host_scalinggov_base:-}" "${host_noturbo_base:-}" || true
 
 	reset_firewall
+
+	libvirt::restore_vms_definitions "${VMS[@]}"
 
 	command exit "${EXIT_CODE}"
 }

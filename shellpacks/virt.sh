@@ -327,6 +327,9 @@ function libvirt::vm_start() {
 			echo "ERROR: cannot find ${vm}'s IP address" >&2
 			return "${SHELLPACK_ERROR}"
 		fi
+
+		virsh dumpxml ${vm} > "${vm_xml_backup_dir}/${vm}".xml
+		ln -s "${vm_xml_backup_dir}/${vm}".xml "${vm_xml_backup_dir}/${vm}".LIVE.xml
 	done
 
 	return "${SHELLPACK_SUCCESS}"
@@ -813,6 +816,87 @@ function libvirt::get_vm_disk_path() {
 	# Returns the first valid block device (ignoring CD-ROMs)
 	# TODO: Handle VMs with multiple disks
 	virsh domblklist "${vm}" | awk 'NR>2 && $2 != "-" {print $2; exit}'
+}
+
+function libvirt::backup_vms_definitions() {
+	local vms=("$@")
+	if (( ${#vms[@]} == 0 )); then
+		vms=( "${MARVIN_KVM_DOMAIN}" )
+	fi
+
+	local vm
+	mkdir -p "${vm_xml_backup_dir}"
+	for vm in "${vms[@]}"; do
+		virsh dumpxml "${vm}" > "${vm_xml_backup_dir}/${vm}.PERSISTENT.xml" || {
+			echo "FATAL: Can't create baseline XML backup for ${vm}"
+			return "${SHELLPACK_ERROR}"
+		}
+	done
+
+	activity_log "run-kvm: VM baselines backed up successfully"
+	return "${SHELLPACK_SUCCESS}"
+}
+
+function libvirt::tune_vms_offline() {
+	local vms=("$@")
+	local vm vm_state
+	if (( ${#vms[@]} == 0 )); then
+		vms=( "${MARVIN_KVM_DOMAIN}" )
+	fi
+	
+	if ! command -v virt-xml >/dev/null 2>&1; then
+		echo "WARNING: virt-xml non trovato. Salto override hardware." >&2
+		return 0 
+	fi
+
+	for vm in "${vms[@]}"; do
+		# --- HUGEPAGES ---
+		if [[ "${MMTESTS_VMS_HUGEPAGES:-no}" == "yes" ]]; then
+			
+			local virtxml_hp_args="hugepages=on"
+			
+			if [[ "${MMTESTS_VMS_HUGEPAGES_SIZE:-}" == "1G" ]]; then
+				virtxml_hp_args="${virtxml_hp_args},hugepages.page.size=1,hugepages.page.unit=G"
+				activity_log "run-kvm: Injecting 1GB hugepages backing into ${vm}"
+			elif [[ "${MMTESTS_VMS_HUGEPAGES_SIZE:-}" == "2M" ]]; then
+				virtxml_hp_args="${virtxml_hp_args},hugepages.page.size=2,hugepages.page.unit=M"
+				activity_log "run-kvm: Injecting 2MB hugepages backing into ${vm}"
+			else
+				activity_log "run-kvm: Injecting default hugepages backing into ${vm}"
+			fi
+
+			virt-xml "${vm}" --edit --memorybacking "${virtxml_hp_args}" >/dev/null 2>&1 || {
+				echo "FATAL: Impossibile iniettare hugepages in ${vm}"
+				return "${SHELLPACK_FAILURE}"
+			}
+		fi
+	done
+
+	return "${SHELLPACK_SUCCESS}"
+}
+
+function libvirt::restore_vms_definitions() {
+	local vms=("$@")
+	if (( ${#vms[@]} == 0 )); then
+		vms=( "${MARVIN_KVM_DOMAIN}" )
+	fi
+
+	if [[ ! -d "${vm_xml_backup_dir:-}" ]]; then
+		return "${SHELLPACK_SUCCESS}"
+	fi
+
+	local vm
+	local backup_file
+	for vm in "${vms[@]}"; do
+		backup_file="${vm_xml_backup_dir}/${vm}.PERSISTENT.xml"
+		if [[ -f "${backup_file}" ]]; then
+			virsh define "${backup_file}" >/dev/null 2>&1 || {
+				echo "WARNING: Failed to restore original XML for ${vm}" >&2
+			}
+		fi
+	done
+
+	return "${SHELLPACK_SUCCESS}"
 }
 
 # Legacy orchestrator: performs infinite polling with a threshold-based hard-reset policy.
