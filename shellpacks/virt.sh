@@ -889,6 +889,45 @@ function libvirt::tune_vms_offline() {
 				return "${SHELLPACK_FAILURE}"
 			}
 		fi
+		# --- VTOPOLOGY ---
+		local vtopology_raw
+		vtopology_raw=$(libvirt::_get_vm_prop "${vm}" "VTOPOLOGY")
+		if [[ -n "${vtopology_raw}" ]]; then
+			activity_log "run-kvm: Injecting topology (${vtopology_raw}) into ${vm}"
+
+			local virtxml_cpu_args=""
+			local -a topo_arr
+			IFS=',' read -r -a topo_arr <<< "${vtopology_raw}"
+
+			local prop k v
+			for prop in "${topo_arr[@]}"; do
+				k="${prop%%=*}"
+				v="${prop##*=}"
+
+				case "${k}" in
+					socket|sockets)  k="sockets" ;;
+					die|dies)        k="dies" ;;
+					core|cores)      k="cores" ;;
+					thread|threads)  k="threads" ;;
+					*)
+						echo "WARNING: Proprietà topologia sconosciuta '${k}' per ${vm}. Ignorata." >&2
+						continue
+						;;
+				esac
+
+				virtxml_cpu_args="${virtxml_cpu_args},topology.${k}=${v}"
+			done
+
+			# XXX
+			virtxml_cpu_args="${virtxml_cpu_args#,}"
+
+			if [[ -n "${virtxml_cpu_args}" ]]; then
+				virt-xml "${vm}" --edit --cpu "${virtxml_cpu_args}" >/dev/null 2>&1 || {
+					echo "FATAL: Impossibile iniettare topologia CPU (${virtxml_cpu_args}) in ${vm}"
+					return "${SHELLPACK_FAILURE}"
+				}
+			fi
+		fi
 	done
 
 	return "${SHELLPACK_SUCCESS}"
