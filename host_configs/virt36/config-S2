@@ -1,0 +1,26 @@
+#!/bin/bash
+
+export RUN_MONITOR=yes
+export MONITORS_ALWAYS=
+export MONITORS_GZIP="perf-sched proc-schedstat mpstat numa-scheduling numa-convergence numa-numastat proc-meminfo proc-vmstat"
+export MONITORS_WITH_LATENCY="vmstat"
+export MONITOR_UPDATE_FREQUENCY=5
+
+export MMTESTS_HOST_IP="192.168.122.1"
+export AUTO_PACKAGE_INSTALL="yes"
+
+# ---------------------------------------------------------
+# OS HOST TUNING: THP on, AutoNUMA Balancing ON
+# ---------------------------------------------------------
+echo always > /sys/kernel/mm/transparent_hugepage/enabled
+echo 1 > /proc/sys/kernel/numa_balancing
+
+# ---------------------------------------------------------
+# VM DEFINITION
+# ---------------------------------------------------------
+export MMTESTS_VMS="vm1 vm2 vm3 vm4 vm5 vm6 vm7 vm8 vm9 vm10 vm11 vm12 vm13 vm14 vm15 vm16"
+
+# Tutte le 16 VM identiche: solo override delle vCPU (20)
+for i in {1..16}; do
+    VM_CPUS["vm${i}"]=20
+done

@@ -690,6 +690,8 @@ function libvirt::vm_deploy_start() {
 
 		virt_cmd+=("--location" "${location}")
 
+    		install-depends virt-install
+
 		# The AutoYaST profile can be a local file or an URL. In the
 		# former case, we inject it into the VM's initrd image. In
 		# the latter, we'll try to download it.
@@ -747,6 +749,8 @@ function libvirt::vm_deploy_wait() {
 function libvirt::pin_vm_ip() {
 	local vm="${1}"
 	local net="${2:-default}"
+
+	install-depends libxml2-tools
 
 	local mac
 	mac=$(virsh dumpxml "${vm}" 2>/dev/null | xmllint --xpath 'string(//interface[@type="network"]/mac/@address)' - 2>/dev/null || true)
@@ -838,246 +842,206 @@ function libvirt::backup_vms_definitions() {
 }
 
 function libvirt::tune_vms_offline() {
-	local vms=("$@")
-	local vm vm_state
-	if (( ${#vms[@]} == 0 )); then
-		vms=( "${MARVIN_KVM_DOMAIN}" )
-	fi
-	
-	if ! command -v virt-xml >/dev/null 2>&1; then
-		echo "WARNING: virt-xml non trovato. Salto override hardware." >&2
-		return 0 
-	fi
+    local vms=("$@")
+    local vm
+    
+    if (( ${#vms[@]} == 0 )); then
+        vms=( "${MARVIN_KVM_DOMAIN}" )
+    fi
 
-	for vm in "${vms[@]}"; do
-		# --- HUGEPAGES ---
-		if [[ "${MMTESTS_VMS_HUGEPAGES:-no}" == "yes" ]]; then
-			
-			local virtxml_hp_args="hugepages=on"
-			
-			if [[ "${MMTESTS_VMS_HUGEPAGES_SIZE:-}" == "1G" ]]; then
-				virtxml_hp_args="${virtxml_hp_args},hugepages.page.size=1,hugepages.page.unit=G"
-				activity_log "run-kvm: Injecting 1GB hugepages backing into ${vm}"
-			elif [[ "${MMTESTS_VMS_HUGEPAGES_SIZE:-}" == "2M" ]]; then
-				virtxml_hp_args="${virtxml_hp_args},hugepages.page.size=2,hugepages.page.unit=M"
-				activity_log "run-kvm: Injecting 2MB hugepages backing into ${vm}"
-			else
-				activity_log "run-kvm: Injecting default hugepages backing into ${vm}"
-			fi
+    install-depends virt-install
+ 
+    if ! command -v virt-xml >/dev/null 2>&1; then
+        echo "WARNING: virt-xml not found. Skipping hardware overrides." >&2
+        return "${SHELLPACK_SUCCESS}"
+    fi
 
-			virt-xml "${vm}" --edit --memorybacking "${virtxml_hp_args}" >/dev/null 2>&1 || {
-				echo "FATAL: Impossibile iniettare hugepages in ${vm}"
-				return "${SHELLPACK_FAILURE}"
-			}
-		fi
-		# --- NUMATUNE ---
-		local numa_nodes numa_mode
-		numa_nodes=$(libvirt::_get_vm_prop "${vm}" "NUMATUNE_NODES")
-		numa_mode=$(libvirt::_get_vm_prop "${vm}" "NUMATUNE_MODE")
-		if [[ -n "${numa_nodes}" ]]; then
-			# Fallback to "strict", if no mode specified
-			numa_mode="${numa_mode:-strict}"
+    for vm in "${vms[@]}"; do
+        # --- HUGEPAGES ---
+        if [[ "${MMTESTS_VMS_HUGEPAGES:-no}" == "yes" ]]; then
+            local hp_args="hugepages=on"
+            if [[ "${MMTESTS_VMS_HUGEPAGES_SIZE:-}" == "1G" ]]; then
+                hp_args="${hp_args},hugepages.page.size=1,hugepages.page.unit=G"
+            elif [[ "${MMTESTS_VMS_HUGEPAGES_SIZE:-}" == "2M" ]]; then
+                hp_args="${hp_args},hugepages.page.size=2,hugepages.page.unit=M"
+            fi
+            activity_log "run-kvm: Injecting hugepages backing into ${vm}"
+            virt-xml "${vm}" --edit --memorybacking "${hp_args}" >/dev/null 2>&1 || true
+        fi
 
-			activity_log "run-kvm: Injecting numatune (mode=${numa_mode}, nodeset=${numa_nodes}) into ${vm}"
+        # --- NUMATUNE ---
+        local numa_nodes numa_mode
+        numa_nodes=$(libvirt::_get_vm_prop "${vm}" "NUMATUNE_NODES")
+        numa_mode=$(libvirt::_get_vm_prop "${vm}" "NUMATUNE_MODE")
+        if [[ -n "${numa_nodes}" ]]; then
+            numa_mode="${numa_mode:-strict}"
+            local safe_nodes="${numa_nodes//,/,,}"
+            activity_log "run-kvm: Injecting numatune (mode=${numa_mode}, nodeset=${numa_nodes}) into ${vm}"
+            virt-xml "${vm}" --edit --numatune "mode=${numa_mode},nodeset=${safe_nodes}" >/dev/null 2>&1 || {
+                echo "FATAL: Failed to inject numatune in ${vm}"
+                return "${SHELLPACK_FAILURE}"
+            }
+        fi
 
-			# XXX
-			local safe_nodes="${numa_nodes//,/,,}"
-			local virtxml_numa_args="memory.mode=${numa_mode},memory.nodeset=${safe_nodes}"
+	# 3. --- VCPUS COUNT & VTOPOLOGY ---
+        # Libvirt requires vCPUs == sockets * dies * cores * threads.
+        # virt-xml forbids editing --vcpus and --cpu in the same command.
+        # Solution: temporarily strip the topology to break the validation deadlock.
+        local target_cpus=$(libvirt::_get_vm_prop "${vm}" "CPUS")
+        local vtopology_raw=$(libvirt::_get_vm_prop "${vm}" "VTOPOLOGY")
 
-			virt-xml "${vm}" --edit --numatune "${virtxml_numa_args}" >/dev/null 2>&1 || {
-				echo "FATAL: Impossibile iniettare numatune in ${vm}"
-				return "${SHELLPACK_FAILURE}"
-			}
-		fi
-		# --- VTOPOLOGY ---
-		local vtopology_raw
-		vtopology_raw=$(libvirt::_get_vm_prop "${vm}" "VTOPOLOGY")
-		if [[ -n "${vtopology_raw}" ]]; then
-			activity_log "run-kvm: Injecting topology (${vtopology_raw}) into ${vm}"
+        if [[ -n "${target_cpus}" || -n "${vtopology_raw}" ]]; then
+            # Nuke the old topology constraint from the XML
+            local tmp_xml=$(mktemp)
+            virsh dumpxml "${vm}" > "${tmp_xml}"
+            sed -i '/<topology /d' "${tmp_xml}"
+            virsh define "${tmp_xml}" >/dev/null 2>&1
+            rm -f "${tmp_xml}"
+            
+            # Now we can freely apply vCPUs and new Topology without conflicts
+            if [[ -n "${target_cpus}" ]]; then
+                activity_log "run-kvm: Overriding vCPU count to ${target_cpus} for ${vm}"
+                virt-xml "${vm}" --edit --vcpus "${target_cpus}" >/dev/null 2>&1 || {
+                    echo "FATAL: Failed to inject vCPUs count in ${vm}"
+                    return "${SHELLPACK_FAILURE}"
+                }
+            fi
 
-			local virtxml_cpu_args=""
-			local -a topo_arr
-			IFS=',' read -r -a topo_arr <<< "${vtopology_raw}"
+            if [[ -n "${vtopology_raw}" ]]; then
+                activity_log "run-kvm: Injecting topology (${vtopology_raw}) into ${vm}"
+                local cpu_args=""
+                local -a topo_arr
+                IFS=',' read -r -a topo_arr <<< "${vtopology_raw}"
+                local prop k v
+                for prop in "${topo_arr[@]}"; do
+                    k="${prop%%=*}"; v="${prop##*=}"
+                    case "${k}" in
+                        socket|sockets)  k="sockets" ;;
+                        die|dies)        k="dies" ;;
+                        core|cores)      k="cores" ;;
+                        thread|threads)  k="threads" ;;
+                        *) continue ;;
+                    esac
+                    cpu_args="${cpu_args},topology.${k}=${v}"
+                done
+                virt-xml "${vm}" --edit --cpu "${cpu_args#,}" >/dev/null 2>&1 || {
+                    echo "FATAL: Failed to inject CPU topology in ${vm}"
+                    return "${SHELLPACK_FAILURE}"
+                }
+            fi
+        fi
 
-			local prop k v
-			for prop in "${topo_arr[@]}"; do
-				k="${prop%%=*}"
-				v="${prop##*=}"
+        # --- GLOBAL VM PINNING (CPUSPIN, CORESPIN, NODESPIN) ---
+        local final_vm_cpuset=""
+        local cpuspin=$(libvirt::_get_vm_prop "${vm}" "CPUSPIN")
+        local global_corespin=$(libvirt::_get_vm_prop "${vm}" "CORESPIN")
+        local nodespin=$(libvirt::_get_vm_prop "${vm}" "NODESPIN")
 
-				case "${k}" in
-					socket|sockets)  k="sockets" ;;
-					die|dies)        k="dies" ;;
-					core|cores)      k="cores" ;;
-					thread|threads)  k="threads" ;;
-					*)
-						echo "WARNING: Proprietà topologia sconosciuta '${k}' per ${vm}. Ignorata." >&2
-						continue
-						;;
-				esac
+        if [[ -n "${cpuspin}" ]]; then
+            final_vm_cpuset="${cpuspin}"
+        elif [[ -n "${global_corespin}" ]]; then
+            local -a host_cores_global=()
+            while IFS= read -r core_cpus; do
+                host_cores_global+=("${core_cpus}")
+            done < <(LC_ALL=C lscpu -p=SOCKET,CORE,CPU | grep -v '^#' | sort -t, -k1,1n -k2,2n -k3,3n | awk -F, '{
+                ck = $1 "_" $2;
+                if (!seen[ck]++) { c_order[idx++] = ck; }
+                cores[ck] = (cores[ck] == "" ? $3 : cores[ck] "," $3);
+            } END {
+                for (i=0; i<idx; i++) print cores[c_order[i]];
+            }')
+            local -a core_arr_global
+            IFS=',' read -r -a core_arr_global <<< "${global_corespin}"
+            local -a collected_cpus=()
+            for pcore in "${core_arr_global[@]}"; do
+                if [[ -n "${host_cores_global[pcore]:-}" ]]; then
+                    collected_cpus+=("${host_cores_global[pcore]}")
+                fi
+            done
+            final_vm_cpuset=$(IFS=,; echo "${collected_cpus[*]}")
+        elif [[ -n "${nodespin}" ]]; then
+            local -a node_arr
+            IFS=',' read -r -a node_arr <<< "${nodespin}"
+            local -a collected_nodes=()
+            for node in "${node_arr[@]}"; do
+                if [[ -f "/sys/devices/system/node/node${node}/cpulist" ]]; then
+                    collected_nodes+=("$(cat "/sys/devices/system/node/node${node}/cpulist")")
+                fi
+            done
+            final_vm_cpuset=$(IFS=,; echo "${collected_nodes[*]}")
+        fi
 
-				virtxml_cpu_args="${virtxml_cpu_args},topology.${k}=${v}"
-			done
+        # Inject global cpuset into <vcpu> root node and set emulatorpin
+        if [[ -n "${final_vm_cpuset}" ]]; then
+            activity_log "run-kvm: Injecting global cpuset (${final_vm_cpuset}) into ${vm}"
+            local safe_cpuset="${final_vm_cpuset//,/,,}"
+            virt-xml "${vm}" --edit --vcpu cpuset="${safe_cpuset}" >/dev/null 2>&1 || {
+                echo "FATAL: Failed to apply global cpuset to ${vm}"
+                return "${SHELLPACK_FAILURE}"
+            }
+            virsh emulatorpin "${vm}" "${final_vm_cpuset}" --config >/dev/null 2>&1 || true
+        fi
 
-			# XXX
-			virtxml_cpu_args="${virtxml_cpu_args#,}"
+        # --- VCPUPIN 1TO1 ---
+        local vcpupin_raw=$(libvirt::_get_vm_prop "${vm}" "VCPUPIN_1TO1")
+        if [[ -n "${vcpupin_raw}" ]]; then
+            activity_log "run-kvm: Injecting vcpupin (${vcpupin_raw}) into ${vm}"
+            local -a pin_arr
+            IFS=',' read -r -a pin_arr <<< "${vcpupin_raw}"
+            local vcpu
+            for vcpu in "${!pin_arr[@]}"; do
+                local pcpu="${pin_arr[vcpu]}"
+                if [[ "${pcpu}" != "-" ]]; then
+                    virsh vcpupin "${vm}" "${vcpu}" "${pcpu}" --config >/dev/null 2>&1 || true
+                fi
+            done
+        fi
 
-			if [[ -n "${virtxml_cpu_args}" ]]; then
-				virt-xml "${vm}" --edit --cpu "${virtxml_cpu_args}" >/dev/null 2>&1 || {
-					echo "FATAL: Impossibile iniettare topologia CPU (${virtxml_cpu_args}) in ${vm}"
-					return "${SHELLPACK_FAILURE}"
-				}
-			fi
-		fi
-		# ---GLOBAL VM PINNING (CPUSPIN, CORESPIN, NODESPIN) ---
-		local final_vm_cpuset=""
-		local cpuspin=$(libvirt::_get_vm_prop "${vm}" "CPUSPIN")
-		local corespin=$(libvirt::_get_vm_prop "${vm}" "CORESPIN")
-		local nodespin=$(libvirt::_get_vm_prop "${vm}" "NODESPIN")
+        # --- VCOREPIN 1TO1 ---
+        local vcorepin_raw=$(libvirt::_get_vm_prop "${vm}" "VCOREPIN_1TO1")
+        if [[ -n "${vcorepin_raw}" ]]; then
+            activity_log "run-kvm: Injecting vcorepin (${vcorepin_raw}) into ${vm}"
 
-		if [[ -n "${cpuspin}" ]]; then
-			activity_log "run-kvm: Injecting global CPUSPIN (${cpuspin}) into ${vm}"
-			final_vm_cpuset="${cpuspin}"
+            # Safely cast XML threads attribute to integer
+            local guest_threads=$(virsh dumpxml "${vm}" 2>/dev/null | xmllint --xpath 'string(//cpu/topology/@threads)' - 2>/dev/null || true)
+            guest_threads="${guest_threads//[^0-9]/}"
+            guest_threads="${guest_threads:-2}"
+            (( guest_threads == 0 )) && guest_threads=2
 
-		elif [[ -n "${corespin}" ]]; then
-			activity_log "run-kvm: Injecting global CORESPIN (${corespin}) into ${vm}"
+            # Deterministic host topology extraction (Fixed boolean and array key tracking)
+            local -a host_cores=()
+            while IFS= read -r core_cpus; do
+                host_cores+=("${core_cpus}")
+            done < <(LC_ALL=C lscpu -p=SOCKET,CORE,CPU | grep -v '^#' | sort -t, -k1,1n -k2,2n -k3,3n | awk -F, '{
+                ck = $1 "_" $2;
+                if (!seen[ck]++) { c_order[idx++] = ck; }
+                cores[ck] = (cores[ck] == "" ? $3 : cores[ck] " " $3);
+            } END {
+                for (i=0; i<idx; i++) print cores[c_order[i]];
+            }')
 
-			# Costruisce la mappa pCore->pCPUs (separati da virgola)
-			local -a host_cores=()
-			while IFS= read -r core_cpus; do
-				host_cores+=("${core_cpus}")
-			done < <(LC_ALL=C lscpu -p=SOCKET,CORE,CPU | grep -v '^#' | sort -t, -k1,1n -k2,2n -k3,3n | awk -F, '{
-				ck = $1 "_" $2;
-				if (!(ck in c_order)) { c_order[idx++] = ck; }
-				# Concatena i thread dello stesso core con la virgola
-				cores[ck] = cores[ck] ? cores[ck] "," $3 : $3;
-			} END {
-				for (i=0; i<idx; i++) print cores[c_order[i]];
-			}')
+            local -a core_arr
+            IFS=',' read -r -a core_arr <<< "${vcorepin_raw}"
+            local vcore
+            for vcore in "${!core_arr[@]}"; do
+                local pcore="${core_arr[vcore]}"
+                if [[ "${pcore}" != "-" && -n "${host_cores[pcore]:-}" ]]; then
+                    # Intentional unquoted array expansion to split space-separated CPUs
+                    local -a pcpus=(${host_cores[pcore]})
+                    local t
+                    for (( t=0; t<guest_threads; t++ )); do
+                        local vcpu_idx=$(( vcore * guest_threads + t ))
+                        local pcpu_idx="${pcpus[t]}"
+                        if [[ -n "${pcpu_idx}" ]]; then
+                            virsh vcpupin "${vm}" "${vcpu_idx}" "${pcpu_idx}" --config >/dev/null 2>&1 || true
+                        fi
+                    done
+                fi
+            done
+        fi
+    done
 
-			local -a core_arr
-			IFS=',' read -r -a core_arr <<< "${corespin}"
-			local -a collected_cpus=()
-
-			for pcore in "${core_arr[@]}"; do
-				if [[ -n "${host_cores[pcore]:-}" ]]; then
-					collected_cpus+=("${host_cores[pcore]}")
-				else
-					echo "FATAL: pCore richiesto (${pcore}) non esiste sull'host per CORESPIN in ${vm}."
-					return "${SHELLPACK_FAILURE}"
-				fi
-			done
-			# Unisce i set di CPU dei vari core separandoli con virgola
-			final_vm_cpuset=$(IFS=,; echo "${collected_cpus[*]}")
-
-		elif [[ -n "${nodespin}" ]]; then
-			activity_log "run-kvm: Injecting global NODESPIN (${nodespin}) into ${vm}"
-			local -a node_arr
-			IFS=',' read -r -a node_arr <<< "${nodespin}"
-			local -a collected_nodes=()
-
-			for node in "${node_arr[@]}"; do
-				if [[ -f "/sys/devices/system/node/node${node}/cpulist" ]]; then
-					collected_nodes+=("$(cat "/sys/devices/system/node/node${node}/cpulist")")
-				else
-					echo "FATAL: Nodo NUMA richiesto (${node}) non esiste sull'host per NODESPIN in ${vm}."
-					return "${SHELLPACK_FAILURE}"
-				fi
-			done
-			final_vm_cpuset=$(IFS=,; echo "${collected_nodes[*]}")
-		fi
-
-		if [[ -n "${final_vm_cpuset}" ]]; then
-			# Applica il cpuset calcolato al nodo root <vcpu>
-			local safe_cpuset="${final_vm_cpuset//,/,,}"
-			virt-xml "${vm}" --edit --vcpu cpuset="${safe_cpuset}" >/dev/null 2>&1 || {
-				echo "FATAL: Impossibile applicare global cpuset ${safe_cpuset} a ${vm}"
-				return "${SHELLPACK_FAILURE}"
-			}
-
-			# Opzionale ma raccomandato per la strict isolation: pinna anche i thread di QEMU (Emulator)
-			virsh emulatorpin "${vm}" "${safe_cpuset}" --config >/dev/null 2>&1 || true
-		fi
-		# --- VCPUPIN ---
-		local vcpupin_raw
-		vcpupin_raw=$(libvirt::_get_vm_prop "${vm}" "VCPUPIN_1TO1")
-		if [[ -n "${vcpupin_raw}" ]]; then
-			activity_log "run-kvm: Injecting vcpupin (${vcpupin_raw}) into ${vm}"
-			local -a pin_arr
-			IFS=',' read -r -a pin_arr <<< "${vcpupin_raw}"
-
-			local vcpu
-			for vcpu in "${!pin_arr[@]}"; do
-				local pcpu="${pin_arr[vcpu]}"
-				if [[ "${pcpu}" != "-" ]]; then
-					virsh vcpupin "${vm}" "${vcpu}" "${pcpu}" --config >/dev/null 2>&1 || {
-						echo "FATAL: Impossibile pinnare vcpu ${vcpu} su pcpu ${pcpu} per ${vm}"
-						return "${SHELLPACK_FAILURE}"
-					}
-				fi
-			done
-		fi
-
-		# --- VCOREPIN ---
-		local vcorepin_raw
-		vcorepin_raw=$(libvirt::_get_vm_prop "${vm}" "VCOREPIN_1TO1")
-		if [[ -n "${vcorepin_raw}" ]]; then
-			activity_log "run-kvm: Injecting vcorepin (${vcorepin_raw}) into ${vm}"
-
-			local guest_threads
-			guest_threads=$(virsh dumpxml "${vm}" 2>/dev/null | xmllint --xpath 'string(//cpu/topology/@threads)' - 2>/dev/null || true)
-			guest_threads="${guest_threads//[^0-9]/}"
-			guest_threads="${guest_threads:-2}"
-
-			local host_threads
-			host_threads=$(LC_ALL=C lscpu | awk -F: '/^Thread\(s\) per core:/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}')
-			if [[ "${guest_threads}" != "${host_threads}" ]]; then
-				echo "FATAL: Thread per core VM (${guest_threads}) disallineati rispetto all'Host (${host_threads}) per ${vm}."
-				return "${SHELLPACK_FAILURE}"
-			fi
-
-			local -a host_cores=()
-			while IFS= read -r core_cpus; do
-				host_cores+=("${core_cpus}")
-			done < <(LC_ALL=C lscpu -p=SOCKET,CORE,CPU | grep -v '^#' | sort -t, -k1,1n -k2,2n -k3,3n | awk -F, '{
-				ck = $1 "_" $2;
-				if (!(ck in c_order)) { c_order[idx++] = ck; }
-				cores[ck] = cores[ck] ? cores[ck] " " $3 : $3;
-			} END {
-				for (i=0; i<idx; i++) print cores[c_order[i]];
-			}')
-
-			# 4. Applicazione del Mapping
-			local -a core_arr
-			IFS=',' read -r -a core_arr <<< "${vcorepin_raw}"
-
-			local vcore
-			for vcore in "${!core_arr[@]}"; do
-				local pcore="${core_arr[vcore]}"
-				if [[ "${pcore}" != "-" ]]; then
-					if [[ -z "${host_cores[pcore]:-}" ]]; then
-						echo "FATAL: pCore richiesto (${pcore}) non esiste sull'host per ${vm}."
-						return "${SHELLPACK_FAILURE}"
-					fi
-
-					local -a pcpus
-					read -r -a pcpus <<< "${host_cores[pcore]}"
-
-					local t
-					for (( t=0; t<guest_threads; t++ )); do
-						local vcpu_idx=$(( vcore * guest_threads + t ))
-						local pcpu_idx="${pcpus[t]}"
-
-						virsh vcpupin "${vm}" "${vcpu_idx}" "${pcpu_idx}" --config >/dev/null 2>&1 || {
-							echo "FATAL: Impossibile pinnare vcpu ${vcpu_idx} su pcpu ${pcpu_idx} (vCore ${vcore} -> pCore ${pcore}) per ${vm}"
-							return "${SHELLPACK_FAILURE}"
-						}
-					done
-				fi
-			done
-		fi
-	done
-
-	return "${SHELLPACK_SUCCESS}"
+    return "${SHELLPACK_SUCCESS}"
 }
 
 function libvirt::restore_vms_definitions() {
