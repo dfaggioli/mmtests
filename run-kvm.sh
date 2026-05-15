@@ -241,6 +241,9 @@ function parse_config() {
 	declare -gA VM_VTOPOLOGY=()
 	declare -gA VM_VCPUPIN_1TO1=()
 	declare -gA VM_VCOREPIN_1TO1=()
+	declare -gA VM_CPUSPIN=()
+	declare -gA VM_CORESPIN=()
+	declare -gA VM_NODESPIN=()
 
 	import_configs
 

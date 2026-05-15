@@ -928,6 +928,75 @@ function libvirt::tune_vms_offline() {
 				}
 			fi
 		fi
+		# ---GLOBAL VM PINNING (CPUSPIN, CORESPIN, NODESPIN) ---
+		local final_vm_cpuset=""
+		local cpuspin=$(libvirt::_get_vm_prop "${vm}" "CPUSPIN")
+		local corespin=$(libvirt::_get_vm_prop "${vm}" "CORESPIN")
+		local nodespin=$(libvirt::_get_vm_prop "${vm}" "NODESPIN")
+
+		if [[ -n "${cpuspin}" ]]; then
+			activity_log "run-kvm: Injecting global CPUSPIN (${cpuspin}) into ${vm}"
+			final_vm_cpuset="${cpuspin}"
+
+		elif [[ -n "${corespin}" ]]; then
+			activity_log "run-kvm: Injecting global CORESPIN (${corespin}) into ${vm}"
+
+			# Costruisce la mappa pCore->pCPUs (separati da virgola)
+			local -a host_cores=()
+			while IFS= read -r core_cpus; do
+				host_cores+=("${core_cpus}")
+			done < <(LC_ALL=C lscpu -p=SOCKET,CORE,CPU | grep -v '^#' | sort -t, -k1,1n -k2,2n -k3,3n | awk -F, '{
+				ck = $1 "_" $2;
+				if (!(ck in c_order)) { c_order[idx++] = ck; }
+				# Concatena i thread dello stesso core con la virgola
+				cores[ck] = cores[ck] ? cores[ck] "," $3 : $3;
+			} END {
+				for (i=0; i<idx; i++) print cores[c_order[i]];
+			}')
+
+			local -a core_arr
+			IFS=',' read -r -a core_arr <<< "${corespin}"
+			local -a collected_cpus=()
+
+			for pcore in "${core_arr[@]}"; do
+				if [[ -n "${host_cores[pcore]:-}" ]]; then
+					collected_cpus+=("${host_cores[pcore]}")
+				else
+					echo "FATAL: pCore richiesto (${pcore}) non esiste sull'host per CORESPIN in ${vm}."
+					return "${SHELLPACK_FAILURE}"
+				fi
+			done
+			# Unisce i set di CPU dei vari core separandoli con virgola
+			final_vm_cpuset=$(IFS=,; echo "${collected_cpus[*]}")
+
+		elif [[ -n "${nodespin}" ]]; then
+			activity_log "run-kvm: Injecting global NODESPIN (${nodespin}) into ${vm}"
+			local -a node_arr
+			IFS=',' read -r -a node_arr <<< "${nodespin}"
+			local -a collected_nodes=()
+
+			for node in "${node_arr[@]}"; do
+				if [[ -f "/sys/devices/system/node/node${node}/cpulist" ]]; then
+					collected_nodes+=("$(cat "/sys/devices/system/node/node${node}/cpulist")")
+				else
+					echo "FATAL: Nodo NUMA richiesto (${node}) non esiste sull'host per NODESPIN in ${vm}."
+					return "${SHELLPACK_FAILURE}"
+				fi
+			done
+			final_vm_cpuset=$(IFS=,; echo "${collected_nodes[*]}")
+		fi
+
+		if [[ -n "${final_vm_cpuset}" ]]; then
+			# Applica il cpuset calcolato al nodo root <vcpu>
+			local safe_cpuset="${final_vm_cpuset//,/,,}"
+			virt-xml "${vm}" --edit --vcpu cpuset="${safe_cpuset}" >/dev/null 2>&1 || {
+				echo "FATAL: Impossibile applicare global cpuset ${safe_cpuset} a ${vm}"
+				return "${SHELLPACK_FAILURE}"
+			}
+
+			# Opzionale ma raccomandato per la strict isolation: pinna anche i thread di QEMU (Emulator)
+			virsh emulatorpin "${vm}" "${safe_cpuset}" --config >/dev/null 2>&1 || true
+		fi
 		# --- VCPUPIN ---
 		local vcpupin_raw
 		vcpupin_raw=$(libvirt::_get_vm_prop "${vm}" "VCPUPIN_1TO1")
