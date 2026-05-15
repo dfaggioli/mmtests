@@ -1,0 +1,61 @@
+#!/bin/bash
+
+export RUN_MONITOR=yes
+export MONITORS_ALWAYS=
+export MONITORS_GZIP="perf-sched proc-schedstat mpstat numa-scheduling numa-convergence numa-numastat proc-meminfo proc-vmstat"
+export MONITORS_WITH_LATENCY="vmstat"
+export MONITOR_UPDATE_FREQUENCY=5
+
+export MMTESTS_HOST_IP="192.168.122.1"
+export AUTO_PACKAGE_INSTALL="yes"
+
+# ---------------------------------------------------------
+# OS HOST TUNING: THP on, AutoNUMA Balancing OFF (Baseline)
+# ---------------------------------------------------------
+echo always > /sys/kernel/mm/transparent_hugepage/enabled
+echo 0 > /proc/sys/kernel/numa_balancing
+
+# ---------------------------------------------------------
+# VM DEFINITION
+# ---------------------------------------------------------
+export MMTESTS_VMS="vm1 vm2 vm3 vm4 vm5 vm6 vm7 vm8 vm9 vm10 vm11 vm12 vm13 vm14 vm15 vm16"
+
+# --- NODO 0 (vm1 - vm8) ---
+for i in {1..8}; do
+    VM_CPUS["vm${i}"]=20
+    VM_VTOPOLOGY["vm${i}"]="sockets=1,cores=10,threads=2"
+    VM_NUMATUNE_NODES["vm${i}"]="0"
+    VM_NUMATUNE_MODE["vm${i}"]="strict"
+    VM_NODESPIN["vm${i}"]="0"
+done
+
+# Assegnazione 1TO1 Chirurgica (10 core fisici per VM sul Nodo 0)
+VM_VCOREPIN_1TO1["vm1"]="0,1,2,3,4,5,6,7,8,9"
+VM_VCOREPIN_1TO1["vm2"]="10,11,12,13,14,15,16,17,18,19"
+VM_VCOREPIN_1TO1["vm3"]="20,21,22,23,24,25,26,27,28,29"
+VM_VCOREPIN_1TO1["vm4"]="30,31,32,33,34,35,36,37,38,39"
+VM_VCOREPIN_1TO1["vm5"]="40,41,42,43,44,45,46,47,48,49"
+VM_VCOREPIN_1TO1["vm6"]="50,51,52,53,54,55,56,57,58,59"
+VM_VCOREPIN_1TO1["vm7"]="60,61,62,63,64,65,66,67,68,69"
+VM_VCOREPIN_1TO1["vm8"]="70,71,72,73,74,75,76,77,78,79"
+
+
+# --- NODO 1 (vm9 - vm16) ---
+for i in {9..16}; do
+    VM_CPUS["vm${i}"]=20
+    VM_VTOPOLOGY["vm${i}"]="sockets=1,cores=10,threads=2"
+    VM_NUMATUNE_NODES["vm${i}"]="1"
+    VM_NUMATUNE_MODE["vm${i}"]="strict"
+    VM_NODESPIN["vm${i}"]="1"
+done
+
+# Assegnazione 1TO1 Chirurgica (10 core fisici per VM sul Nodo 1)
+# Attenzione: i core fisici del Nodo 1 per la CPU Intel 6972P partono dal 96
+VM_VCOREPIN_1TO1["vm9"]="96,97,98,99,100,101,102,103,104,105"
+VM_VCOREPIN_1TO1["vm10"]="106,107,108,109,110,111,112,113,114,115"
+VM_VCOREPIN_1TO1["vm11"]="116,117,118,119,120,121,122,123,124,125"
+VM_VCOREPIN_1TO1["vm12"]="126,127,128,129,130,131,132,133,134,135"
+VM_VCOREPIN_1TO1["vm13"]="136,137,138,139,140,141,142,143,144,145"
+VM_VCOREPIN_1TO1["vm14"]="146,147,148,149,150,151,152,153,154,155"
+VM_VCOREPIN_1TO1["vm15"]="156,157,158,159,160,161,162,163,164,165"
+VM_VCOREPIN_1TO1["vm16"]="166,167,168,169,170,171,172,173,174,175"
