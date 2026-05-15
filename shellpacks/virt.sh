@@ -928,6 +928,84 @@ function libvirt::tune_vms_offline() {
 				}
 			fi
 		fi
+		# --- VCPUPIN ---
+		local vcpupin_raw
+		vcpupin_raw=$(libvirt::_get_vm_prop "${vm}" "VCPUPIN_1TO1")
+		if [[ -n "${vcpupin_raw}" ]]; then
+			activity_log "run-kvm: Injecting vcpupin (${vcpupin_raw}) into ${vm}"
+			local -a pin_arr
+			IFS=',' read -r -a pin_arr <<< "${vcpupin_raw}"
+
+			local vcpu
+			for vcpu in "${!pin_arr[@]}"; do
+				local pcpu="${pin_arr[vcpu]}"
+				if [[ "${pcpu}" != "-" ]]; then
+					virsh vcpupin "${vm}" "${vcpu}" "${pcpu}" --config >/dev/null 2>&1 || {
+						echo "FATAL: Impossibile pinnare vcpu ${vcpu} su pcpu ${pcpu} per ${vm}"
+						return "${SHELLPACK_FAILURE}"
+					}
+				fi
+			done
+		fi
+
+		# --- VCOREPIN ---
+		local vcorepin_raw
+		vcorepin_raw=$(libvirt::_get_vm_prop "${vm}" "VCOREPIN_1TO1")
+		if [[ -n "${vcorepin_raw}" ]]; then
+			activity_log "run-kvm: Injecting vcorepin (${vcorepin_raw}) into ${vm}"
+
+			local guest_threads
+			guest_threads=$(virsh dumpxml "${vm}" 2>/dev/null | xmllint --xpath 'string(//cpu/topology/@threads)' - 2>/dev/null || true)
+			guest_threads="${guest_threads//[^0-9]/}"
+			guest_threads="${guest_threads:-2}"
+
+			local host_threads
+			host_threads=$(LC_ALL=C lscpu | awk -F: '/^Thread\(s\) per core:/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}')
+			if [[ "${guest_threads}" != "${host_threads}" ]]; then
+				echo "FATAL: Thread per core VM (${guest_threads}) disallineati rispetto all'Host (${host_threads}) per ${vm}."
+				return "${SHELLPACK_FAILURE}"
+			fi
+
+			local -a host_cores=()
+			while IFS= read -r core_cpus; do
+				host_cores+=("${core_cpus}")
+			done < <(LC_ALL=C lscpu -p=SOCKET,CORE,CPU | grep -v '^#' | sort -t, -k1,1n -k2,2n -k3,3n | awk -F, '{
+				ck = $1 "_" $2;
+				if (!(ck in c_order)) { c_order[idx++] = ck; }
+				cores[ck] = cores[ck] ? cores[ck] " " $3 : $3;
+			} END {
+				for (i=0; i<idx; i++) print cores[c_order[i]];
+			}')
+
+			# 4. Applicazione del Mapping
+			local -a core_arr
+			IFS=',' read -r -a core_arr <<< "${vcorepin_raw}"
+
+			local vcore
+			for vcore in "${!core_arr[@]}"; do
+				local pcore="${core_arr[vcore]}"
+				if [[ "${pcore}" != "-" ]]; then
+					if [[ -z "${host_cores[pcore]:-}" ]]; then
+						echo "FATAL: pCore richiesto (${pcore}) non esiste sull'host per ${vm}."
+						return "${SHELLPACK_FAILURE}"
+					fi
+
+					local -a pcpus
+					read -r -a pcpus <<< "${host_cores[pcore]}"
+
+					local t
+					for (( t=0; t<guest_threads; t++ )); do
+						local vcpu_idx=$(( vcore * guest_threads + t ))
+						local pcpu_idx="${pcpus[t]}"
+
+						virsh vcpupin "${vm}" "${vcpu_idx}" "${pcpu_idx}" --config >/dev/null 2>&1 || {
+							echo "FATAL: Impossibile pinnare vcpu ${vcpu_idx} su pcpu ${pcpu_idx} (vCore ${vcore} -> pCore ${pcore}) per ${vm}"
+							return "${SHELLPACK_FAILURE}"
+						}
+					done
+				fi
+			done
+		fi
 	done
 
 	return "${SHELLPACK_SUCCESS}"

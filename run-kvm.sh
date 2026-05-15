@@ -239,6 +239,8 @@ function parse_config() {
 	declare -gA VM_VCPUPIN_1TO1=()
 	declare -gA VM_VCOREPIN_1TO1=()
 	declare -gA VM_VTOPOLOGY=()
+	declare -gA VM_VCPUPIN_1TO1=()
+	declare -gA VM_VCOREPIN_1TO1=()
 
 	import_configs
 
