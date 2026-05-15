@@ -236,6 +236,9 @@ function parse_config() {
 	# XXX
 	declare -gA VM_NUMATUNE_NODES=()
 	declare -gA VM_NUMATUNE_MODE=()
+	declare -gA VM_VCPUPIN_1TO1=()
+	declare -gA VM_VCOREPIN_1TO1=()
+	declare -gA VM_VTOPOLOGY=()
 
 	import_configs
 
