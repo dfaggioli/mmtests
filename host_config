@@ -160,6 +160,10 @@
 # XXX
 # export MMTESTS_VM_ONLINE_SCRIPTS=kvm-update-packages
 
+# XXX
+#export MMTESTS_VMS_HUGEPAGES=no
+#export MMTESTS_VMS_HUGEPAGES_SIZE="2M"
+
 # If `numad` should be used on the host
 #export MMTESTS_NUMA_POLICY="numad"
 
