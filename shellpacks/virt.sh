@@ -870,6 +870,25 @@ function libvirt::tune_vms_offline() {
 				return "${SHELLPACK_FAILURE}"
 			}
 		fi
+		# --- NUMATUNE ---
+		local numa_nodes numa_mode
+		numa_nodes=$(libvirt::_get_vm_prop "${vm}" "NUMATUNE_NODES")
+		numa_mode=$(libvirt::_get_vm_prop "${vm}" "NUMATUNE_MODE")
+		if [[ -n "${numa_nodes}" ]]; then
+			# Fallback to "strict", if no mode specified
+			numa_mode="${numa_mode:-strict}"
+
+			activity_log "run-kvm: Injecting numatune (mode=${numa_mode}, nodeset=${numa_nodes}) into ${vm}"
+
+			# XXX
+			local safe_nodes="${numa_nodes//,/,,}"
+			local virtxml_numa_args="memory.mode=${numa_mode},memory.nodeset=${safe_nodes}"
+
+			virt-xml "${vm}" --edit --numatune "${virtxml_numa_args}" >/dev/null 2>&1 || {
+				echo "FATAL: Impossibile iniettare numatune in ${vm}"
+				return "${SHELLPACK_FAILURE}"
+			}
+		fi
 	done
 
 	return "${SHELLPACK_SUCCESS}"

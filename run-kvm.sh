@@ -233,6 +233,9 @@ function parse_config() {
 	declare -gA VM_DEPLOY_DISTRO=()
 	declare -gA VM_INSTALL_LOCATION=()
 	declare -gA VM_AUTOYAST=()
+	# XXX
+	declare -gA VM_NUMATUNE_NODES=()
+	declare -gA VM_NUMATUNE_MODE=()
 
 	import_configs
 
