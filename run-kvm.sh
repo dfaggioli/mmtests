@@ -1182,7 +1182,6 @@ function execute_tests() {
 	activity_log "run-kvm: Iteration $((MMTEST_HOST_ITERATION+1)) end"
 
 	collect_results
-	stop_vms
 
 	activity_log "run-kvm: End"
 	teststate_log "status :: ${EXIT_CODE}"
@@ -1195,6 +1194,9 @@ function cleanup() {
 
 	# Kill dangling sync processes if interrupted
 	[[ -n "${NCPID:-}" ]] && kill "${NCPID}" 2>/dev/null || true
+
+        # Make sure that VMs are always stopped, even if the run failed.
+	stop_vms
 
 	shutdown_numad
 	shutdown_tuned
