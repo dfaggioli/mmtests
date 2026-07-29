@@ -49,12 +49,12 @@
     </routing>
   </networking>
   <bootloader>
+    <loader_type>grub2-efi</loader_type>
     <global>
       <timeout config:type="integer">8</timeout>
-      <update_nvram config:type="boolean">true</update_nvram>
+      <update_nvram>true</update_nvram>
       <append>console=hvc0</append>
     </global>
-    <loader_type>grub2-efi</loader_type>
   </bootloader>
   <firewall>
     <enable_firewall config:type="boolean">false</enable_firewall>
