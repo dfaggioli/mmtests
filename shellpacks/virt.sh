@@ -850,7 +850,7 @@ function libvirt::tune_vms_offline() {
     fi
 
     install-depends virt-install
- 
+
     if ! command -v virt-xml >/dev/null 2>&1; then
         echo "WARNING: virt-xml not found. Skipping hardware overrides." >&2
         return "${SHELLPACK_SUCCESS}"
