@@ -171,11 +171,9 @@
       <package>biosdevname</package>
       <package>btrfsprogs</package>
       <package>emacs</package>
-      <package>emacs</package>
       <package>gzip</package>
       <package>ipmitool</package>
       <package>mc</package>
-      <package>nmap</package>
       <package>nmap</package>
       <package>openssh-clients</package>
       <package>openssh-server</package>
@@ -183,6 +181,7 @@
       <package>smartmontools</package>
       <package>tar</package>
       <package>zsh</package>
+      <packages>vim</packages>
     </packages>
   </software>
   <timezone>
@@ -197,7 +196,7 @@
         <filename>update-all.sh</filename>
         <source><![CDATA[#!/bin/sh
           zypper ref
-          zypper dup -y --no-recommends
+          zypper up -y --no-recommends
         ]]></source>
       </script>
       <!-- Enable SSH root login -->
