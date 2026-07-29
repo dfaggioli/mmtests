@@ -50,15 +50,10 @@
   </networking>
   <bootloader>
     <global>
-      <activate>true</activate>
-      <boot_boot>true</boot_boot>
-      <boot_extended>false</boot_extended>
-      <boot_mbr>true</boot_mbr>
-      <boot_root>false</boot_root>
-      <generic_mbr>false</generic_mbr>
-      <hiddenmenu>false</hiddenmenu>
       <timeout config:type="integer">8</timeout>
+      <update_nvram config:type="boolean">true</update_nvram>
     </global>
+    <loader_type>grub2-efi</loader_type>
   </bootloader>
   <firewall>
     <enable_firewall config:type="boolean">false</enable_firewall>
@@ -96,6 +91,7 @@
           <label>efi</label>
           <size>512MB</size>
           <partition_nr config:type="integer">1</partition_nr>
+          <partition_id config:type="integer">259</partition_id>
           <format config:type="boolean">true</format>
           <filesystem config:type="symbol">vfat</filesystem>
         </partition>
@@ -143,10 +139,6 @@
       <enable config:type="list">
         <service>sshd</service>
       </enable>
-      <disable config:type="list">
-        <service>nscd</service>
-	<service>smart</service>
-      </disable>
     </services>
   </services-manager>
   <software>
@@ -190,15 +182,6 @@
   </timezone>
   <scripts>
     <chroot-scripts config:type="list">
-      <!-- Try to update everything -->
-      <script>
-        <chrooted config:type="boolean">true</chrooted>
-        <filename>update-all.sh</filename>
-        <source><![CDATA[#!/bin/sh
-          zypper ref
-          zypper up -y --no-recommends
-        ]]></source>
-      </script>
       <!-- Enable SSH root login -->
       <script>
         <chrooted config:type="boolean">true</chrooted>
