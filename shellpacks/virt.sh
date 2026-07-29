@@ -696,12 +696,17 @@ function libvirt::vm_deploy_start() {
 		# the latter, we'll try to download it.
 		if [[ -f "${autoyast}" ]]; then
 			virt_cmd+=("--initrd-inject" "${autoyast}")
-			virt_cmd+=("--extra-args" "network=1 install=${location} autoyast=file:///$(basename "${autoyast}") console=ttyS0,115200n8")
+			#virt_cmd+=("--extra-args" "network=1 install=${location} autoyast=file:///$(basename "${autoyast}") console=ttyS0,115200n8 ZYPP_MAX_DOWNLOAD_RETRIES=5")
+			virt_cmd+=("--extra-args" "network=1 autoyast=file:///$(basename "${autoyast}") console=ttyS0,115200n8 ZYPP_MAX_DOWNLOAD_RETRIES=5")
 			cp "${autoyast}" "${SHELLPACK_LOG_BASE:-/tmp}/${vm}-autoyast" || true
 		else
-			virt_cmd+=("--extra-args" "network=1 install=${location} autoyast=${autoyast} console=ttyS0,115200n8")
+			#virt_cmd+=("--extra-args" "network=1 install=${location} autoyast=${autoyast} console=ttyS0,115200n8 ZYPP_MAX_DOWNLOAD_RETRIES=5")
+			virt_cmd+=("--extra-args" "network=1 autoyast=${autoyast} console=ttyS0,115200n8 ZYPP_MAX_DOWNLOAD_RETRIES=5")
 		fi
 	fi
+
+	local virt_cmd_str=$(printf "%q " "${virt_cmd[@]}")
+	echo "${virt_cmd_str}" | tee "${SHELLPACK_LOG_BASE:-/tmp}/${vm}-virt-install.cmd"
 
 	"${virt_cmd[@]}" || return "${SHELLPACK_ERROR}"
 	return "${SHELLPACK_SUCCESS}"
