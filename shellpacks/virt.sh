@@ -605,7 +605,8 @@ function libvirt::vm_deploy_start() {
 
 	# Let's now start to put together the actual virt-install command
 	local serial_log="${SHELLPACK_LOG_BASE:-/tmp}/${vm}-serial.log"
-	rm -f "${serial_log}"
+	local y2log_log="${SHELLPACK_LOG_BASE:-/tmp}/${vm}-y2log.log"
+	rm -f "${serial_log} ${y2log_log}"
 
 	local -a virt_cmd=(
 		virt-install
@@ -620,8 +621,9 @@ function libvirt::vm_deploy_start() {
 		--network network=default,model=virtio
 		--graphics none
 		--boot uefi
-		--serial "file,path=${serial_log}"
-		--console pty,target_type=serial
+		--console "file,path=${serial_log},target_type=virtio"
+		--console "file,path=${y2log_log},target_type=virtio"
+		--console pty,target_type=virtio
 		--noautoconsole
 	)
 
@@ -696,12 +698,10 @@ function libvirt::vm_deploy_start() {
 		# the latter, we'll try to download it.
 		if [[ -f "${autoyast}" ]]; then
 			virt_cmd+=("--initrd-inject" "${autoyast}")
-			#virt_cmd+=("--extra-args" "network=1 install=${location} autoyast=file:///$(basename "${autoyast}") console=ttyS0,115200n8 ZYPP_MAX_DOWNLOAD_RETRIES=5")
-			virt_cmd+=("--extra-args" "network=1 autoyast=file:///$(basename "${autoyast}") console=ttyS0,115200n8 TERM=dumb ZYPP_MAX_DOWNLOAD_RETRIES=5")
+			virt_cmd+=("--extra-args" "network=1 autoyast=file:///$(basename "${autoyast}") console=hvc0 y2log=/dev/hvc1 Y2DEBUG=1 ZYPP_MAX_DOWNLOAD_RETRIES=5")
 			cp "${autoyast}" "${SHELLPACK_LOG_BASE:-/tmp}/${vm}-autoyast" || true
 		else
-			#virt_cmd+=("--extra-args" "network=1 install=${location} autoyast=${autoyast} console=ttyS0,115200n8 ZYPP_MAX_DOWNLOAD_RETRIES=5")
-			virt_cmd+=("--extra-args" "network=1 autoyast=${autoyast} console=ttyS0,115200n8 TERM=dumb ZYPP_MAX_DOWNLOAD_RETRIES=5")
+			virt_cmd+=("--extra-args" "network=1 autoyast=${autoyast} console=hvc0 y2log=/dev/hvc1 Y2DEBUG=1 ZYPP_MAX_DOWNLOAD_RETRIES=5")
 		fi
 	fi
 
