@@ -642,19 +642,49 @@ function mmtests_activity() {
 # $1: target IP
 # $2: target port
 # $3: token
+#function mmtests_send_token() {
+#	while :
+#	do
+#		nc $_NCV -4 -z $1 $2 2> /dev/null
+#		if [ $? -eq 0 ]; then
+#			# Connection can be established, let's send!
+#			echo "$3" | nc $_NCV -n -4 -q 0 $1 $2 2> /dev/null
+#			if [ $? -eq 0 ]; then
+#				break
+#			fi
+#		else
+#			sleep 1
+#		fi
+#	done
+#}
+#function mmtests_send_token() {
+#    # Introduce a jitter between to avoid "token storms".
+#    sleep 0.$((RANDOM % 10))
+#
+#    while :
+#    do
+#        # Let's try without "-z"
+#        echo "$3" | nc $_NCV -n -4 -q 0 $1 $2 2> /dev/null
+#        if [ $? -eq 0 ]; then
+#            break
+#        fi
+#        sleep 0.5
+#    done
+#}
 function mmtests_send_token() {
 	while :
 	do
-		nc $_NCV -4 -z $1 $2 2> /dev/null
+		nc $_NCV -w 2 -4 -z $1 $2 2> /dev/null
 		if [ $? -eq 0 ]; then
 			# Connection can be established, let's send!
-			echo "$3" | nc $_NCV -n -4 -q 0 $1 $2 2> /dev/null
+			echo "$3" | nc $_NCV -w 2 -n -4 -q 0 $1 $2 2> /dev/null
 			if [ $? -eq 0 ]; then
 				break
 			fi
-		else
-			sleep 1
 		fi
+		# Let's introduce some jitter in the retry attempts,
+		# to try to avoid "token storms".
+		sleep $(( (RANDOM % 3) + 1 ))
 	done
 }
 
