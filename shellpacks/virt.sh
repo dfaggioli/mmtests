@@ -211,8 +211,7 @@ function libvirt::vm_define_if_missing() {
 	eval "${shopt_save}"
 
 	if [[ "${match_found}" == "false" ]]; then
-		echo "ERROR: ${vm} not defined, and no suitable XML config file found." >&2
-		return "${SHELLPACK_ERROR}"
+		echo "INFO: ${vm} not defined, and no suitable XML config file found." >&2
 	fi
 
 	return "${SHELLPACK_SUCCESS}"
