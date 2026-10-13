@@ -1,0 +1,53 @@
+#!/bin/bash
+set ${MMTESTS_SH_DEBUG:-+x}
+
+export SCRIPT=`basename $0 | sed -e 's/\./\\\./'`
+export SCRIPTDIR=`echo $0 | sed -e "s/$SCRIPT//"`
+cd $SCRIPTDIR/../configs || exit
+
+# STREAM
+for CONFIG in `ls config-workload-stream-* | grep -v -E ".*-zen[0-9]$"`; do
+	#16 x 128MiB x 4 = 8192MiB
+	sed    -e 's/STREAM_SIZE=.*/STREAM_SIZE=\$((1048576*3*8192))/' $CONFIG > $CONFIG-zen6
+	sed -i -e '/STREAM_BUILD_CFLAGS=/d' $CONFIG-zen6
+	echo 'export STREAM_BUILD_CFLAGS="-lm -Ofast -march=znver5 -mcmodel=medium -DOFFSET=512"' \
+	     >> $CONFIG-zen6
+	echo 'export BUILDFLAGS_ENABLE_COMPILEFLAGS=yes' >> $CONFIG-zen6
+	echo 'export MMTESTS_TOOLCHAIN="gcc-16"' >> $CONFIG-zen6
+	echo "export OMP_DISPLAY_AFFINITY=true" >> $CONFIG-zen6
+done
+
+# NAS
+for CPUCOUNT in 12 24 32 64 128 192 256 360 384 512 768 1024; do
+	NAS_NOTUNECONFIG=config-hpc-nas-mpi-${CPUCOUNT}cpus-xfs-zen6-notuning
+	NAS_BASECONFIG=config-hpc-nas-mpi-${CPUCOUNT}cpus-xfs-zen6-default
+
+	# No special tuning
+	cp config-hpc-nas-mpi-full-xfs $NAS_NOTUNECONFIG
+	sed -i  -e "s/NAS_MAX_CPUS=.*/NAS_MAX_CPUS=${CPUCOUNT}/"		\
+		-e "s/NAS_CLASS=.*/NAS_CLASS=D/"				\
+		$NAS_NOTUNECONFIG
+
+	# Default baseline configuration
+	cp $NAS_NOTUNECONFIG $NAS_BASECONFIG
+
+	sed -i -e '/NAS_OPTIMISE_FLAGS/d' $NAS_BASECONFIG
+	echo "export NAS_OPTIMISE_FLAGS=-O3"				>> $NAS_BASECONFIG
+	echo								>> $NAS_BASECONFIG
+	echo "echo Setting performance governor"			>> $NAS_BASECONFIG
+	echo "cpupower frequency-set -g performance"			>> $NAS_BASECONFIG
+	echo								>> $NAS_BASECONFIG
+	echo 'export BUILDFLAGS_ENABLE_COMPILEFLAGS=yes'		>> $NAS_BASECONFIG
+	echo 'export MMTESTS_TOOLCHAIN="gcc-16"'			>> $NAS_BASECONFIG
+	echo 'export MMTESTS_MPI_USE_DISTRO="yes"'			>> $NAS_BASECONFIG
+
+	cat $NAS_BASECONFIG | sed -e '/numa_balancing/d' > config-hpc-nas-mpi-${CPUCOUNT}cpus-xfs-zen6-tuned
+	sed -i  -e 's/NAS_OPTIMISE_FLAGS=.*/NAS_OPTIMISE_FLAGS="-Ofast -march=znver5 -mtune=znver5 -ftree-vectorize"/' \
+										   config-hpc-nas-mpi-${CPUCOUNT}cpus-xfs-zen6-tuned
+	echo 'echo 0 > /proc/sys/kernel/numa_balancing'				>> config-hpc-nas-mpi-${CPUCOUNT}cpus-xfs-zen6-tuned
+	echo 'export NAS_BIND=yes'						>> config-hpc-nas-mpi-${CPUCOUNT}cpus-xfs-zen6-tuned
+	echo 'export NAS_BIND_PLACE=l3cache'			>> config-hpc-nas-mpi-${CPUCOUNT}cpus-xfs-zen6-tuned
+done
+
+cp config-hpc-nas-mpi-1024-xfs-zen6-tuned config-hpc-nas-mpi-Ncpus-xfs-zen6-selective
+echo 'export NAS_JOB_MAX_CPUS="bt=512 cg=512 ep=1024 is=512 lu=512 mg=512 sp=512"' >> config-hpc-nas-mpi-Ncpus-xfs-zen6-selective
