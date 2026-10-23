@@ -715,46 +715,60 @@ function libvirt::vm_deploy_start() {
 # Barrier Function: Waits for the OS deployment to finish by polling the serial log.
 # Consumes the import marker to bypass wait if applicable.
 # Parameters: <vm_name>
+# Barrier Function: Waits for OS deployment completion.
+# Splits the wait into strictly sequential phases (Install -> Start -> Boot)
+# for predictable execution and distinct error handling.
 function libvirt::vm_deploy_wait() {
 	local vm="${1:-}"
 	local marker="${SHELLPACK_LOG_BASE:-/tmp}/${vm}-import.marker"
 	local serial_log="${SHELLPACK_LOG_BASE:-/tmp}/${vm}-serial.log"
-
-	# Tolerance thresholds for transient down states (e.g., reboots)
-	local max_down_retries=3 # 3 minutes reboot tolerance
-	local down_count=0
+	local elapsed=0
 
 	if [[ -f "${marker}" ]]; then
 		rm -f "${marker}"
-		echo "VM ${vm} imported successfully (no OS deployment wait required)."
+		echo "INFO: VM ${vm} imported (bypassing OS deployment wait)"
 		libvirt::vm_stop "${vm}" || true
 		return "${SHELLPACK_SUCCESS}"
 	fi
 
-	echo "Waiting for OS deployment to complete on ${vm} (check ${serial_log} for details)..."
+	echo "Waiting for ${vm} OS installation to complete..."
+	
+	while libvirt::vm_is_running "${vm}"; do
+		sleep 10
+		(( elapsed += 10 ))
+		if (( elapsed > 3600 )); then
+			echo "ERROR: Installation of ${vm} timed out after 1 hour" >&2
+			return "${SHELLPACK_ERROR}"
+		fi
+	done
+
+	echo "OS installation of ${vm} complete. Starting it"
+
+	virsh start "${vm}" >/dev/null 2>&1 || {
+		echo "ERROR: Failed to start ${vm} for its first boot" >&2
+		return "${SHELLPACK_ERROR}"
+	}
+
+	local elapsed=0
 	while true; do
 		if [[ -f "${serial_log}" ]] && grep -aq " login:" "${serial_log}"; then
-			echo "INFO: Installation completed successfully for ${vm}."
+			echo "${vm} boot completed successfully"
 			break
 		fi
 
 		if ! libvirt::vm_is_running "${vm}"; then
-			(( down_count++ )) || true
-
-			if (( down_count > max_down_retries )); then
-				echo "ERROR: VM ${vm} remained in 'shut off' state for too long. Deployment failed or stalled." >&2
-				return "${SHELLPACK_ERROR}"
-			fi
-			echo "WARNING: VM ${vm} is probably rebooting. Waiting (down_count: ${down_count}/${max_down_retries})..."
-		else
-			down_count=0
+			echo "ERROR: VM ${vm} crashed or powered off unexpectedly during boot" >&2
+			return "${SHELLPACK_ERROR}"
 		fi
 
-		sleep 60
+		sleep 10
+		(( elapsed += 10 ))
+		if (( elapsed > 600 )); then
+			echo "ERROR: ${vm} boot timed out after 10 minutes" >&2
+			return "${SHELLPACK_ERROR}"
+		fi
 	done
 
-	# Provisioning with virt-install typicall leaves the VM up. Shut it
-	# down, as the prosecution of the automatio expects it to be that.
 	libvirt::vm_stop "${vm}" || true
 	return "${SHELLPACK_SUCCESS}"
 }
