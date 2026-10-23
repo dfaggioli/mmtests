@@ -720,6 +720,10 @@ function libvirt::vm_deploy_wait() {
 	local marker="${SHELLPACK_LOG_BASE:-/tmp}/${vm}-import.marker"
 	local serial_log="${SHELLPACK_LOG_BASE:-/tmp}/${vm}-serial.log"
 
+	# Tolerance thresholds for transient down states (e.g., reboots)
+	local max_down_retries=3 # 3 minutes reboot tolerance
+	local down_count=0
+
 	if [[ -f "${marker}" ]]; then
 		rm -f "${marker}"
 		echo "VM ${vm} imported successfully (no OS deployment wait required)."
@@ -729,16 +733,24 @@ function libvirt::vm_deploy_wait() {
 
 	echo "Waiting for OS deployment to complete on ${vm} (check ${serial_log} for details)..."
 	while true; do
-		if [[ -f "${serial_log}" ]] && grep -q " login:" "${serial_log}"; then
-			echo "Installation completed for ${vm}."
+		if [[ -f "${serial_log}" ]] && grep -aq " login:" "${serial_log}"; then
+			echo "INFO: Installation completed successfully for ${vm}."
 			break
 		fi
 
 		if ! libvirt::vm_is_running "${vm}"; then
-			echo "ERROR: VM ${vm} stopped unexpectedly during deployment." >&2
-			return "${SHELLPACK_ERROR}"
+			(( down_count++ )) || true
+
+			if (( down_count > max_down_retries )); then
+				echo "ERROR: VM ${vm} remained in 'shut off' state for too long. Deployment failed or stalled." >&2
+				return "${SHELLPACK_ERROR}"
+			fi
+			echo "WARNING: VM ${vm} is probably rebooting. Waiting (down_count: ${down_count}/${max_down_retries})..."
+		else
+			down_count=0
 		fi
-		sleep 10
+
+		sleep 60
 	done
 
 	# Provisioning with virt-install typicall leaves the VM up. Shut it
