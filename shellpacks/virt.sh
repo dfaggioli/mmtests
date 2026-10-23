@@ -619,11 +619,11 @@ function libvirt::vm_deploy_start() {
 		--memory "${memory}"
 		--disk "${disk_spec}"
 		--network network=default,model=virtio
-		--graphics none
+		--graphics vnc
 		--boot uefi
-		--console pty,target_type=virtio
 		--console "file,path=${serial_log},target_type=virtio"
 		--console "file,path=${y2log_log},target_type=virtio"
+		--console pty,target_type=virtio
 		--noautoconsole
 	)
 
