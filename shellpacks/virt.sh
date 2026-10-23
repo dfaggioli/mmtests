@@ -84,76 +84,54 @@ function libvirt::vm_ip_address() {
 			fi
 		fi
 
-		local ip_addr=""
+		local -a candidate_ips=()
+		local test_ip=""
 
-		# TIER 1: Libvirt DHCP Leases (O(1) lookup, zero traffic)
-		ip_addr=$(virsh domifaddr "${vm}" --source lease 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d/ -f1 | head -n 1 || true)
+		# Discover all potential IPs (that we can find via the "Libvirt API")
+		mapfile -t candidate_ips < <(
+			virsh domifaddr "${vm}" --source lease 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d/ -f1 || true
+			virsh domifaddr "${vm}" --source agent 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d/ -f1 || true
+		)
 
-		# TIER 2: QEMU Guest Agent (Bypasses host networking)
-		if [[ -z "${ip_addr}" ]]; then
-			ip_addr=$(virsh domifaddr "${vm}" --source agent 2>/dev/null | awk '/ipv4/ {print $4}' | cut -d/ -f1 | head -n 1 || true)
-		fi
-
-		# TIER 3: Legacy ARP Fallback
-		if [[ -z "${ip_addr}" ]]; then
-			local macs
-			macs=$(virsh dumpxml "${vm}" 2>/dev/null | grep "mac address" | sed "s/.*'\(.*\)'.*/\1/g" || true)
-
-			if [[ -n "${macs}" ]]; then
-				# 3.1: Dynamic ARP Cache Warm-up
-				# Discovers the bridge the VM is attached to and extracts the broadcast address
-				local bridge bcast
-				bridge=$(virsh domiflist "${vm}" 2>/dev/null | awk 'NR>2 && $3!="" {print $3; exit}' || true)
-				if [[ -n "${bridge:-}" && "${bridge}" != "-" ]]; then
-					bcast=$(ip -4 addr show "${bridge}" 2>/dev/null | awk '/brd/ {print $6}' || true)
-					if [[ -n "${bcast:-}" ]]; then
-						ping -c 2 -b "${bcast}" >/dev/null 2>&1 || true
-					fi
-				fi
-
-				# 3.2: L2 Cache Parsing (ARP/Neighbor)
-				local mac guest_ips test_ip
-				for mac in ${macs}; do
-					guest_ips=""
-					if command -v ip >/dev/null 2>&1; then
-						guest_ips=$(ip n show 2>/dev/null | awk -v m="${mac}" 'tolower($0) ~ tolower(m) {print $1}' || true)
-					elif command -v arp >/dev/null 2>&1; then
-						guest_ips=$(arp -an 2>/dev/null | grep -i "${mac}" | awk '{ gsub(/[\(\)]/,"",$2); print $2 }' || true)
-					fi
-
-					# 3.3: L3 Validation (Ping + REACHABLE state lock)
-					for test_ip in ${guest_ips}; do
-						if ping -c 1 -q "${test_ip}" >/dev/null 2>&1; then
-							local state="UNKNOWN"
-							while [[ "${state}" != "REACHABLE" ]]; do
-								if command -v ip >/dev/null 2>&1; then
-									state=$(ip n show 2>/dev/null | awk -v ip="${test_ip}" '$1 == ip {print $NF}' || echo "UNKNOWN")
-								else
-									# Fallback loop breaker if 'ip' is missing
-									state="REACHABLE"
-								fi
-								[[ "${state}" != "REACHABLE" ]] && sleep 1
-							done
-							
-							# Validation complete
-							ip_addr="${test_ip}"
-							break 2 # Break out of both IP and MAC loops
-						fi
-					done
-				done
+		# Active validation: the first IP that answers, it's the one!
+		for test_ip in "${candidate_ips[@]}"; do
+			[[ -z "${test_ip}" ]] && continue
+			if ping -c 1 -W 1 "${test_ip}" >/dev/null 2>&1; then
+				echo "${test_ip}"
+				return "${SHELLPACK_SUCCESS}"
 			fi
-		fi
+		done
 
-		# Exit Condition
-		if [[ -n "${ip_addr:-}" ]]; then
-			echo "${ip_addr}"
-			return "${SHELLPACK_SUCCESS}"
+		# We're not there yet... Fallback to legacy ARP
+		local macs
+		macs=$(virsh dumpxml "${vm}" 2>/dev/null | grep "mac address" | sed "s/.*'\(.*\)'.*/\1/g" || true)
+
+		if [[ -n "${macs}" ]]; then
+			local bridge bcast guest_ips
+			
+			# Dynamic ARP Cache Warm-up
+			bridge=$(virsh domiflist "${vm}" 2>/dev/null | awk 'NR>2 && $3!="" {print $3; exit}' || true)
+			if [[ -n "${bridge:-}" && "${bridge}" != "-" ]]; then
+				bcast=$(ip -4 addr show "${bridge}" 2>/dev/null | awk '/brd/ {print $6}' || true)
+				[[ -n "${bcast:-}" ]] && ping -c 2 -b "${bcast}" >/dev/null 2>&1 || true
+			fi
+
+			# L2 Cache Parsing & L3 Validation
+			for mac in ${macs}; do
+				guest_ips=$(ip n show 2>/dev/null | awk -v m="${mac}" 'tolower($0) ~ tolower(m) {print $1}' || true)
+				for test_ip in ${guest_ips}; do
+					[[ -z "${test_ip}" ]] && continue
+					if ping -c 1 -W 1 "${test_ip}" >/dev/null 2>&1; then
+						echo "${test_ip}"
+						return "${SHELLPACK_SUCCESS}"
+					fi
+				done
+			done
 		fi
 
 		sleep 10
 	done
 }
-
 # Checks if a VM has already been defined and is known to libvirt. If not,
 # looks for a valid XML config file for such VM (within some directories),
 # and defines it if it finds one.
