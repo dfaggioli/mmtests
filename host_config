@@ -170,6 +170,9 @@ export AUTO_PACKAGE_INSTALL="yes"
 #export MMTESTS_VM_NUMATUNE_MODE["vm2"]="preferred"
 # XXX
 #export MMTESTS_VM_VTOPOLOGY["vm1"]="sockets=2,cores=16,threads=2"
+# XXX Nodo locale costa 10, accedere a QUALSIASI altro nodo costa 21.
+#VNUMA_DISTANCES["vm1"]="10,21"
+
 # XXX
 #export MMTESTS_VM_VCPUPIN_1TO1["vm1"]="1,4,-,6"
 #export MMTESTS_VM_VCOREPIN_1TO1["vm1"]=1,2,4,8"

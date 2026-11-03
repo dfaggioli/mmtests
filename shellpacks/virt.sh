@@ -947,6 +947,16 @@ function libvirt::tune_vms_offline() {
                 if (( has_sockets == 1 && t_sockets > 0 )); then
                     activity_log "run-kvm: Generating virtual NUMA topology (${t_sockets} nodes) for ${vm}"
 
+                    # Estrazione e parsing distanze (Default: 10,20)
+                    local vnuma_distances dist_local=10 dist_remote=20
+                    vnuma_distances=$(libvirt::_get_vm_prop "${vm}" "VNUMA_DISTANCES")
+                    vnuma_distances="${vnuma_distances// /}" # Sanitizzazione: rimuove spazi vuoti
+
+                    if [[ -n "${vnuma_distances}" && "${vnuma_distances}" == *","* ]]; then
+                        dist_local="${vnuma_distances%,*}"
+                        dist_remote="${vnuma_distances#*,}"
+                    fi
+
                     local vnuma_xml=$(mktemp)
                     virsh dumpxml "${vm}" > "${vnuma_xml}"
 
@@ -970,8 +980,9 @@ function libvirt::tune_vms_offline() {
 
                         numa_payload+="<cell id='${s}' cpus='${start_cpu}-${end_cpu}' memory='${node_mem}' unit='KiB'><distances>"
                         for (( d=0; d<t_sockets; d++ )); do
-                            local dist=20
-                            (( s == d )) && dist=10
+                            # Assegnazione parametrica distanza
+                            local dist="${dist_remote}"
+                            (( s == d )) && dist="${dist_local}"
                             numa_payload+="<sibling id='${d}' value='${dist}'/>"
                         done
                         numa_payload+="</distances></cell>"
