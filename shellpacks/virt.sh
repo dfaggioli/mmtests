@@ -891,10 +891,9 @@ function libvirt::tune_vms_offline() {
             }
         fi
 
-	# 3. --- VCPUS COUNT & VTOPOLOGY ---
+        # 3. --- VCPUS COUNT & VTOPOLOGY & VNUMA ---
         # Libvirt requires vCPUs == sockets * dies * cores * threads.
         # virt-xml forbids editing --vcpus and --cpu in the same command.
-        # Solution: temporarily strip the topology to break the validation deadlock.
         local target_cpus=$(libvirt::_get_vm_prop "${vm}" "CPUS")
         local vtopology_raw=$(libvirt::_get_vm_prop "${vm}" "VTOPOLOGY")
 
@@ -905,7 +904,7 @@ function libvirt::tune_vms_offline() {
             sed -i '/<topology /d' "${tmp_xml}"
             virsh define "${tmp_xml}" >/dev/null 2>&1
             rm -f "${tmp_xml}"
-            
+
             # Now we can freely apply vCPUs and new Topology without conflicts
             if [[ -n "${target_cpus}" ]]; then
                 activity_log "run-kvm: Overriding vCPU count to ${target_cpus} for ${vm}"
@@ -920,22 +919,81 @@ function libvirt::tune_vms_offline() {
                 local cpu_args=""
                 local -a topo_arr
                 IFS=',' read -r -a topo_arr <<< "${vtopology_raw}"
+
+                # Tracking esplicito dei parametri per il calcolo vNUMA
+                local t_sockets=1 t_dies=1 t_cores=1 t_threads=1
+                local has_sockets=0
+
                 local prop k v
                 for prop in "${topo_arr[@]}"; do
                     k="${prop%%=*}"; v="${prop##*=}"
                     case "${k}" in
-                        socket|sockets)  k="sockets" ;;
-                        die|dies)        k="dies" ;;
-                        core|cores)      k="cores" ;;
-                        thread|threads)  k="threads" ;;
+                        socket|sockets)  k="sockets"; t_sockets="${v}"; has_sockets=1 ;;
+                        die|dies)        k="dies"; t_dies="${v}" ;;
+                        core|cores)      k="cores"; t_cores="${v}" ;;
+                        thread|threads)  k="threads"; t_threads="${v}" ;;
                         *) continue ;;
                     esac
                     cpu_args="${cpu_args},topology.${k}=${v}"
                 done
+
                 virt-xml "${vm}" --edit --cpu "${cpu_args#,}" >/dev/null 2>&1 || {
                     echo "FATAL: Failed to inject CPU topology in ${vm}"
                     return "${SHELLPACK_FAILURE}"
                 }
+
+                # --- GENERAZIONE DINAMICA VNUMA ---
+                # Se la topologia include una dichiarazione di socket, creiamo un nodo vNUMA per socket.
+                if (( has_sockets == 1 && t_sockets > 0 )); then
+                    activity_log "run-kvm: Generating virtual NUMA topology (${t_sockets} nodes) for ${vm}"
+
+                    local vnuma_xml=$(mktemp)
+                    virsh dumpxml "${vm}" > "${vnuma_xml}"
+
+                    local total_mem_kib
+                    total_mem_kib=$(xmllint --xpath 'string(//domain/memory)' "${vnuma_xml}")
+
+                    local mem_per_node=$(( total_mem_kib / t_sockets ))
+                    local mem_remainder=$(( total_mem_kib % t_sockets ))
+                    local vcpus_per_node=$(( t_dies * t_cores * t_threads ))
+
+                    # Costruzione della griglia XML
+                    local numa_payload="<numa>"
+                    local s d
+                    for (( s=0; s<t_sockets; s++ )); do
+                        local start_cpu=$(( s * vcpus_per_node ))
+                        local end_cpu=$(( start_cpu + vcpus_per_node - 1 ))
+
+                        # Assegna l'eventuale resto dei byte all'ultimo nodo
+                        local node_mem=${mem_per_node}
+                        (( s == t_sockets - 1 )) && node_mem=$(( mem_per_node + mem_remainder ))
+
+                        numa_payload+="<cell id='${s}' cpus='${start_cpu}-${end_cpu}' memory='${node_mem}' unit='KiB'><distances>"
+                        for (( d=0; d<t_sockets; d++ )); do
+                            local dist=20
+                            (( s == d )) && dist=10
+                            numa_payload+="<sibling id='${d}' value='${dist}'/>"
+                        done
+                        numa_payload+="</distances></cell>"
+                    done
+                    numa_payload+="</numa>"
+
+                    # Iniezione AWK sicura: rimuove un blocco <numa> preesistente e inietta il nuovo
+                    awk -v numa="${numa_payload}" '
+                        /<numa>/ { in_numa=1; next }
+                        /<\/numa>/ { in_numa=0; next }
+                        in_numa { next }
+                        /<\/cpu>/ { print "    " numa; print $0; next }
+                        { print }
+                    ' "${vnuma_xml}" > "${vnuma_xml}.new" && mv "${vnuma_xml}.new" "${vnuma_xml}"
+
+                    virsh define "${vnuma_xml}" >/dev/null 2>&1 || {
+                        echo "FATAL: Failed to define virtual NUMA topology for ${vm}"
+                        rm -f "${vnuma_xml}"
+                        return "${SHELLPACK_FAILURE}"
+                    }
+                    rm -f "${vnuma_xml}"
+                fi
             fi
         fi
 
