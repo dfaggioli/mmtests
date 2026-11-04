@@ -943,18 +943,49 @@ function libvirt::tune_vms_offline() {
                 }
 
                 # --- GENERAZIONE DINAMICA VNUMA ---
-                # Se la topologia include una dichiarazione di socket, creiamo un nodo vNUMA per socket.
                 if (( has_sockets == 1 && t_sockets > 0 )); then
                     activity_log "run-kvm: Generating virtual NUMA topology (${t_sockets} nodes) for ${vm}"
 
-                    # Estrazione e parsing distanze (Default: 10,20)
-                    local vnuma_distances dist_local=10 dist_remote=20
+                    local vnuma_distances
                     vnuma_distances=$(libvirt::_get_vm_prop "${vm}" "VNUMA_DISTANCES")
-                    vnuma_distances="${vnuma_distances// /}" # Sanitizzazione: rimuove spazi vuoti
+                    vnuma_distances="${vnuma_distances// /}" # Sanitizzazione spazi
 
-                    if [[ -n "${vnuma_distances}" && "${vnuma_distances}" == *","* ]]; then
-                        dist_local="${vnuma_distances%,*}"
-                        dist_remote="${vnuma_distances#*,}"
+                    # 1. NORMALIZZAZIONE: Pre-calcolo della matrice
+                    local -a numa_matrix=()
+                    local s d
+
+                    if [[ "${vnuma_distances}" == *";"* ]]; then
+                        # Caso A: Matrice esplicita (Nessun fallback)
+                        # Se l'input è parziale, i valori mancanti restano vuoti causando
+                        # il fallimento controllato di 'virsh define' per XML schema invalido.
+                        local -a dist_matrix_rows=()
+                        IFS=';' read -r -a dist_matrix_rows <<< "${vnuma_distances}"
+
+                        for (( s=0; s<t_sockets; s++ )); do
+                            local -a current_row_dists=()
+                            [[ -n "${dist_matrix_rows[s]:-}" ]] && IFS=',' read -r -a current_row_dists <<< "${dist_matrix_rows[s]}"
+
+                            for (( d=0; d<t_sockets; d++ )); do
+                                numa_matrix[s * t_sockets + d]="${current_row_dists[d]:-}"
+                            done
+                        done
+                    else
+                        # Caso B: Simmetrico base
+                        local dist_local=10 dist_remote=20
+                        if [[ "${vnuma_distances}" == *","* ]]; then
+                            dist_local="${vnuma_distances%,*}"
+                            dist_remote="${vnuma_distances#*,}"
+                        fi
+
+                        for (( s=0; s<t_sockets; s++ )); do
+                            for (( d=0; d<t_sockets; d++ )); do
+                                if (( s == d )); then
+                                    numa_matrix[s * t_sockets + d]="${dist_local}"
+                                else
+                                    numa_matrix[s * t_sockets + d]="${dist_remote}"
+                                fi
+                            done
+                        done
                     fi
 
                     local vnuma_xml=$(mktemp)
@@ -967,29 +998,25 @@ function libvirt::tune_vms_offline() {
                     local mem_remainder=$(( total_mem_kib % t_sockets ))
                     local vcpus_per_node=$(( t_dies * t_cores * t_threads ))
 
-                    # Costruzione della griglia XML
+                    # 2. GENERAZIONE XML
                     local numa_payload="<numa>"
-                    local s d
                     for (( s=0; s<t_sockets; s++ )); do
                         local start_cpu=$(( s * vcpus_per_node ))
                         local end_cpu=$(( start_cpu + vcpus_per_node - 1 ))
 
-                        # Assegna l'eventuale resto dei byte all'ultimo nodo
                         local node_mem=${mem_per_node}
                         (( s == t_sockets - 1 )) && node_mem=$(( mem_per_node + mem_remainder ))
 
                         numa_payload+="<cell id='${s}' cpus='${start_cpu}-${end_cpu}' memory='${node_mem}' unit='KiB'><distances>"
                         for (( d=0; d<t_sockets; d++ )); do
-                            # Assegnazione parametrica distanza
-                            local dist="${dist_remote}"
-                            (( s == d )) && dist="${dist_local}"
+                            local dist="${numa_matrix[s * t_sockets + d]}"
                             numa_payload+="<sibling id='${d}' value='${dist}'/>"
                         done
                         numa_payload+="</distances></cell>"
                     done
                     numa_payload+="</numa>"
 
-                    # Iniezione AWK sicura: rimuove un blocco <numa> preesistente e inietta il nuovo
+                    # 3. INIEZIONE AWK
                     awk -v numa="${numa_payload}" '
                         /<numa>/ { in_numa=1; next }
                         /<\/numa>/ { in_numa=0; next }
@@ -999,7 +1026,7 @@ function libvirt::tune_vms_offline() {
                     ' "${vnuma_xml}" > "${vnuma_xml}.new" && mv "${vnuma_xml}.new" "${vnuma_xml}"
 
                     virsh define "${vnuma_xml}" >/dev/null 2>&1 || {
-                        echo "FATAL: Failed to define virtual NUMA topology for ${vm}"
+                        echo "FATAL: Failed to define virtual NUMA topology for ${vm}. Check VNUMA_DISTANCES matrix." >&2
                         rm -f "${vnuma_xml}"
                         return "${SHELLPACK_FAILURE}"
                     }

@@ -172,6 +172,9 @@ export AUTO_PACKAGE_INSTALL="yes"
 #export MMTESTS_VM_VTOPOLOGY["vm1"]="sockets=2,cores=16,threads=2"
 # XXX Nodo locale costa 10, accedere a QUALSIASI altro nodo costa 21.
 #VNUMA_DISTANCES["vm1"]="10,21"
+# XXX Riga 1 (Nodo 0): Locale=10, Hop vicino=21, Hop cross-blade=31, Hop cross-blade=31
+# XXX Riga 2 (Nodo 1): Hop vicino=21, Locale=10, Hop cross-blade=31, Hop cross-blade=31
+#VNUMA_DISTANCES["vm1"]="10,21,31,31;21,10,31,31;31,31,10,21;31,31,21,10"
 
 # XXX
 #export MMTESTS_VM_VCPUPIN_1TO1["vm1"]="1,4,-,6"
