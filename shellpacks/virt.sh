@@ -865,6 +865,18 @@ function libvirt::tune_vms_offline() {
     fi
 
     for vm in "${vms[@]}"; do
+        # --- MEMORY ---
+        local target_memory
+        target_memory=$(libvirt::_get_vm_prop "${vm}" "MEMORY")
+
+        if [[ -n "${target_memory}" ]]; then
+            activity_log "run-kvm: Overriding memory to ${target_memory} MiB for ${vm}"
+            virt-xml "${vm}" --edit --memory "${target_memory}" >/dev/null 2>&1 || {
+                echo "FATAL: Failed to inject memory size '${target_memory}' in ${vm}." >&2
+                return "${SHELLPACK_FAILURE}"
+            }
+        fi
+
         # --- HUGEPAGES ---
         if [[ "${MMTESTS_VMS_HUGEPAGES:-no}" == "yes" ]]; then
             local hp_args="hugepages=on"
