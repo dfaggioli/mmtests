@@ -184,6 +184,9 @@ export AUTO_PACKAGE_INSTALL="yes"
 #VM_CORESPIN["vm1"]=""
 #VM_NODESPIN["vm1"]=""
 
+# XXX (on|off or (yes|no)
+#VM_KVM_HINT_DEDICATED["vm1"]="on"
+
 # If `numad` should be used on the host
 #export MMTESTS_NUMA_POLICY="numad"
 

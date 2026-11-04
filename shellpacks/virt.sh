@@ -1143,6 +1143,34 @@ function libvirt::tune_vms_offline() {
                 fi
             done
         fi
+
+        # --- KVM HINT DEDICATED ---
+        local kvm_hint_raw
+        kvm_hint_raw=$(libvirt::_get_vm_prop "${vm}" "KVM_HINT_DEDICATED")
+
+        if [[ -n "${kvm_hint_raw}" ]]; then
+            local kvm_hint_state=""
+
+            # Normalizzazione dell'input: cast a minuscolo (${var,,}) e validazione
+            case "${kvm_hint_raw,,}" in
+                yes|on)  kvm_hint_state="on" ;;
+                no|off)  kvm_hint_state="off" ;;
+                *)
+                    echo "WARNING: Unrecognized value '${kvm_hint_raw}' for KVM_HINT_DEDICATED in ${vm}. Expected yes/no or on/off. Skipping." >&2 
+                    ;;
+            esac
+
+            # Se l'input è valido, procediamo con l'iniezione/aggiornamento
+            if [[ -n "${kvm_hint_state}" ]]; then
+                activity_log "run-kvm: Injecting <kvm><hint-dedicated state='${kvm_hint_state}'/></kvm> into ${vm}"
+
+                # virt-xml gestisce il blocco <features> in modo idempotente e differenziale.
+                virt-xml "${vm}" --edit --features "kvm_hint_dedicated=${kvm_hint_state}" >/dev/null 2>&1 || {
+                    echo "FATAL: Failed to set kvm_hint_dedicated=${kvm_hint_state} in ${vm}" >&2
+                    return "${SHELLPACK_FAILURE}"
+                }
+            fi
+        fi
     done
 
     return "${SHELLPACK_SUCCESS}"
