@@ -891,11 +891,24 @@ function libvirt::tune_vms_offline() {
             }
         fi
 
-        # 3. --- VCPUS COUNT & VTOPOLOGY & VNUMA ---
+        # 3. --- CPU MODEL, VCPUS COUNT, VTOPOLOGY & VNUMA ---
         # Libvirt requires vCPUs == sockets * dies * cores * threads.
         # virt-xml forbids editing --vcpus and --cpu in the same command.
         local target_cpus=$(libvirt::_get_vm_prop "${vm}" "CPUS")
         local vtopology_raw=$(libvirt::_get_vm_prop "${vm}" "VTOPOLOGY")
+        local cpu_model_raw=$(libvirt::_get_vm_prop "${vm}" "CPU_MODEL")
+
+        # --- CPU MODEL ---
+        if [[ -n "${cpu_model_raw}" ]]; then
+            activity_log "run-kvm: Overriding CPU model to '${cpu_model_raw}' for ${vm}"
+
+            # Use virt-xml to set the CPU model.
+            # We skip bash-level validation to rely on libvirt's strict schema/capabilities check.
+            virt-xml "${vm}" --edit --cpu "${cpu_model_raw}" >/dev/null 2>&1 || {
+                echo "FATAL: Failed to inject CPU model '${cpu_model_raw}' in ${vm}. Check libvirt supported models." >&2
+                return "${SHELLPACK_FAILURE}"
+            }
+        fi
 
         if [[ -n "${target_cpus}" || -n "${vtopology_raw}" ]]; then
             # Nuke the old topology constraint from the XML

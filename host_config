@@ -177,6 +177,9 @@ export AUTO_PACKAGE_INSTALL="yes"
 #VNUMA_DISTANCES["vm1"]="10,21,31,31;21,10,31,31;31,31,10,21;31,31,21,10"
 
 # XXX
+#VM_CPU_MODEL["vm1"]="host-passthrough"
+
+# XXX
 #export MMTESTS_VM_VCPUPIN_1TO1["vm1"]="1,4,-,6"
 #export MMTESTS_VM_VCOREPIN_1TO1["vm1"]=1,2,4,8"
 # XXX
