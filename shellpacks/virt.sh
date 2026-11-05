@@ -889,28 +889,14 @@ function libvirt::tune_vms_offline() {
             virt-xml "${vm}" --edit --memorybacking "${hp_args}" >/dev/null 2>&1 || true
         fi
 
-        # --- NUMATUNE ---
-        local numa_nodes numa_mode
-        numa_nodes=$(libvirt::_get_vm_prop "${vm}" "NUMATUNE_NODES")
-        numa_mode=$(libvirt::_get_vm_prop "${vm}" "NUMATUNE_MODE")
-        if [[ -n "${numa_nodes}" ]]; then
-            numa_mode="${numa_mode:-strict}"
-            local safe_nodes="${numa_nodes//,/,,}"
-            activity_log "run-kvm: Injecting numatune (mode=${numa_mode}, nodeset=${numa_nodes}) into ${vm}"
-            virt-xml "${vm}" --edit --numatune "mode=${numa_mode},nodeset=${safe_nodes}" >/dev/null 2>&1 || {
-                echo "FATAL: Failed to inject numatune in ${vm}"
-                return "${SHELLPACK_FAILURE}"
-            }
-        fi
-
-        # 3. --- CPU MODEL, VCPUS COUNT, VTOPOLOGY & VNUMA ---
-        # Libvirt requires vCPUs == sockets * dies * cores * threads.
-        # virt-xml forbids editing --vcpus and --cpu in the same command.
+        # --- CPU MODEL, VCPUS COUNT & TOPOLOGY ---
         local target_cpus=$(libvirt::_get_vm_prop "${vm}" "CPUS")
         local vtopology_raw=$(libvirt::_get_vm_prop "${vm}" "VTOPOLOGY")
         local cpu_model_raw=$(libvirt::_get_vm_prop "${vm}" "CPU_MODEL")
 
-        # --- CPU MODEL ---
+        # Inizializzazione sicura per il calcolo vNUMA successivo
+        local t_sockets=1 t_dies=1 t_cores=1 t_threads=1
+
         if [[ -n "${cpu_model_raw}" ]]; then
             activity_log "run-kvm: Overriding CPU model to '${cpu_model_raw}' for ${vm}"
 
@@ -945,15 +931,11 @@ function libvirt::tune_vms_offline() {
                 local -a topo_arr
                 IFS=',' read -r -a topo_arr <<< "${vtopology_raw}"
 
-                # Tracking esplicito dei parametri per il calcolo vNUMA
-                local t_sockets=1 t_dies=1 t_cores=1 t_threads=1
-                local has_sockets=0
-
                 local prop k v
                 for prop in "${topo_arr[@]}"; do
                     k="${prop%%=*}"; v="${prop##*=}"
                     case "${k}" in
-                        socket|sockets)  k="sockets"; t_sockets="${v}"; has_sockets=1 ;;
+                        socket|sockets)  k="sockets"; t_sockets="${v}" ;;
                         die|dies)        k="dies"; t_dies="${v}" ;;
                         core|cores)      k="cores"; t_cores="${v}" ;;
                         thread|threads)  k="threads"; t_threads="${v}" ;;
@@ -966,98 +948,160 @@ function libvirt::tune_vms_offline() {
                     echo "FATAL: Failed to inject CPU topology in ${vm}"
                     return "${SHELLPACK_FAILURE}"
                 }
-
-                # --- GENERAZIONE DINAMICA VNUMA ---
-                if (( has_sockets == 1 && t_sockets > 0 )); then
-                    activity_log "run-kvm: Generating virtual NUMA topology (${t_sockets} nodes) for ${vm}"
-
-                    local vnuma_distances
-                    vnuma_distances=$(libvirt::_get_vm_prop "${vm}" "VNUMA_DISTANCES")
-                    vnuma_distances="${vnuma_distances// /}" # Sanitizzazione spazi
-
-                    # 1. NORMALIZZAZIONE: Pre-calcolo della matrice
-                    local -a numa_matrix=()
-                    local s d
-
-                    if [[ "${vnuma_distances}" == *";"* ]]; then
-                        # Caso A: Matrice esplicita (Nessun fallback)
-                        # Se l'input è parziale, i valori mancanti restano vuoti causando
-                        # il fallimento controllato di 'virsh define' per XML schema invalido.
-                        local -a dist_matrix_rows=()
-                        IFS=';' read -r -a dist_matrix_rows <<< "${vnuma_distances}"
-
-                        for (( s=0; s<t_sockets; s++ )); do
-                            local -a current_row_dists=()
-                            [[ -n "${dist_matrix_rows[s]:-}" ]] && IFS=',' read -r -a current_row_dists <<< "${dist_matrix_rows[s]}"
-
-                            for (( d=0; d<t_sockets; d++ )); do
-                                numa_matrix[s * t_sockets + d]="${current_row_dists[d]:-}"
-                            done
-                        done
-                    else
-                        # Caso B: Simmetrico base
-                        local dist_local=10 dist_remote=20
-                        if [[ "${vnuma_distances}" == *","* ]]; then
-                            dist_local="${vnuma_distances%,*}"
-                            dist_remote="${vnuma_distances#*,}"
-                        fi
-
-                        for (( s=0; s<t_sockets; s++ )); do
-                            for (( d=0; d<t_sockets; d++ )); do
-                                if (( s == d )); then
-                                    numa_matrix[s * t_sockets + d]="${dist_local}"
-                                else
-                                    numa_matrix[s * t_sockets + d]="${dist_remote}"
-                                fi
-                            done
-                        done
-                    fi
-
-                    local vnuma_xml=$(mktemp)
-                    virsh dumpxml "${vm}" > "${vnuma_xml}"
-
-                    local total_mem_kib
-                    total_mem_kib=$(xmllint --xpath 'string(//domain/memory)' "${vnuma_xml}")
-
-                    local mem_per_node=$(( total_mem_kib / t_sockets ))
-                    local mem_remainder=$(( total_mem_kib % t_sockets ))
-                    local vcpus_per_node=$(( t_dies * t_cores * t_threads ))
-
-                    # 2. GENERAZIONE XML
-                    local numa_payload="<numa>"
-                    for (( s=0; s<t_sockets; s++ )); do
-                        local start_cpu=$(( s * vcpus_per_node ))
-                        local end_cpu=$(( start_cpu + vcpus_per_node - 1 ))
-
-                        local node_mem=${mem_per_node}
-                        (( s == t_sockets - 1 )) && node_mem=$(( mem_per_node + mem_remainder ))
-
-                        numa_payload+="<cell id='${s}' cpus='${start_cpu}-${end_cpu}' memory='${node_mem}' unit='KiB'><distances>"
-                        for (( d=0; d<t_sockets; d++ )); do
-                            local dist="${numa_matrix[s * t_sockets + d]}"
-                            numa_payload+="<sibling id='${d}' value='${dist}'/>"
-                        done
-                        numa_payload+="</distances></cell>"
-                    done
-                    numa_payload+="</numa>"
-
-                    # 3. INIEZIONE AWK
-                    awk -v numa="${numa_payload}" '
-                        /<numa>/ { in_numa=1; next }
-                        /<\/numa>/ { in_numa=0; next }
-                        in_numa { next }
-                        /<\/cpu>/ { print "    " numa; print $0; next }
-                        { print }
-                    ' "${vnuma_xml}" > "${vnuma_xml}.new" && mv "${vnuma_xml}.new" "${vnuma_xml}"
-
-                    virsh define "${vnuma_xml}" >/dev/null 2>&1 || {
-                        echo "FATAL: Failed to define virtual NUMA topology for ${vm}. Check VNUMA_DISTANCES matrix." >&2
-                        rm -f "${vnuma_xml}"
-                        return "${SHELLPACK_FAILURE}"
-                    }
-                    rm -f "${vnuma_xml}"
-                fi
             fi
+        fi
+
+        # --- GENERAZIONE DINAMICA VNUMA ED EXPLICIT MEMNODES ---
+        local vnuma_nodes_raw
+        vnuma_nodes_raw=$(libvirt::_get_vm_prop "${vm}" "VNUMA_NODES")
+        vnuma_nodes_raw="${vnuma_nodes_raw// /}"
+
+        local num_vnodes=0
+        local -a vnode_cpus=()
+
+        if [[ -n "${vnuma_nodes_raw}" ]]; then
+            # Calcolo del totale vCPU garantito (priorità all'override CPUS, fallback al prodotto topologico)
+            local total_vcpus="${target_cpus:-$(( t_sockets * t_dies * t_cores * t_threads ))}"
+            (( total_vcpus == 0 )) && total_vcpus=1
+
+            if [[ "${vnuma_nodes_raw}" =~ ^[0-9]+$ ]]; then
+                # Modalità Scalare
+                num_vnodes="${vnuma_nodes_raw}"
+                local cpus_per_node=$(( total_vcpus / num_vnodes ))
+                for (( i=0; i<num_vnodes; i++ )); do
+                    local start=$(( i * cpus_per_node ))
+                    local end=$(( start + cpus_per_node - 1 ))
+                    (( i == num_vnodes - 1 )) && end=$(( total_vcpus - 1 ))
+                    vnode_cpus[i]="${start}-${end}"
+                done
+            else
+                # Modalità Vettoriale Pass-through
+                IFS=';' read -r -a vnode_cpus <<< "${vnuma_nodes_raw}"
+                num_vnodes="${#vnode_cpus[@]}"
+            fi
+        fi
+
+        if (( num_vnodes > 0 )); then
+            activity_log "run-kvm: Generating virtual NUMA topology (${num_vnodes} nodes) for ${vm}"
+
+            local vnuma_distances memnodes_raw global_numa_nodes global_numa_mode
+            vnuma_distances=$(libvirt::_get_vm_prop "${vm}" "VNUMA_DISTANCES")
+            vnuma_distances="${vnuma_distances// /}"
+
+            memnodes_raw=$(libvirt::_get_vm_prop "${vm}" "NUMATUNE_MEMNODES")
+            memnodes_raw="${memnodes_raw// /}"
+
+            global_numa_nodes=$(libvirt::_get_vm_prop "${vm}" "NUMATUNE_NODES")
+            global_numa_mode=$(libvirt::_get_vm_prop "${vm}" "NUMATUNE_MODE")
+
+            # Normalizzazione Matrix Distanze
+            local -a numa_matrix=()
+            local s d
+
+            if [[ "${vnuma_distances}" == *";"* ]]; then
+                local -a dist_matrix_rows=()
+                IFS=';' read -r -a dist_matrix_rows <<< "${vnuma_distances}"
+
+                for (( s=0; s<num_vnodes; s++ )); do
+                    local -a current_row_dists=()
+                    [[ -n "${dist_matrix_rows[s]:-}" ]] && IFS=',' read -r -a current_row_dists <<< "${dist_matrix_rows[s]}"
+                    for (( d=0; d<num_vnodes; d++ )); do
+                        numa_matrix[s * num_vnodes + d]="${current_row_dists[d]:-}"
+                    done
+                done
+            else
+                local dist_local=10 dist_remote=20
+                if [[ "${vnuma_distances}" == *","* ]]; then
+                    dist_local="${vnuma_distances%,*}"
+                    dist_remote="${vnuma_distances#*,}"
+                fi
+
+                for (( s=0; s<num_vnodes; s++ )); do
+                    for (( d=0; d<num_vnodes; d++ )); do
+                        if (( s == d )); then
+                            numa_matrix[s * num_vnodes + d]="${dist_local}"
+                        else
+                            numa_matrix[s * num_vnodes + d]="${dist_remote}"
+                        fi
+                    done
+                done
+            fi
+
+            local vnuma_xml=$(mktemp)
+            virsh dumpxml "${vm}" > "${vnuma_xml}"
+
+            local total_mem_kib
+            total_mem_kib=$(xmllint --xpath 'string(//domain/memory)' "${vnuma_xml}")
+
+            local mem_per_node=$(( total_mem_kib / num_vnodes ))
+            local mem_remainder=$(( total_mem_kib % num_vnodes ))
+
+            # Generazione Payload vNUMA (<cpu>)
+            local numa_payload="<numa>"
+            for (( s=0; s<num_vnodes; s++ )); do
+                local node_cpus="${vnode_cpus[s]}"
+
+                local node_mem=${mem_per_node}
+                (( s == num_vnodes - 1 )) && node_mem=$(( mem_per_node + mem_remainder ))
+
+                numa_payload+="<cell id='${s}' cpus='${node_cpus}' memory='${node_mem}' unit='KiB'><distances>"
+                for (( d=0; d<num_vnodes; d++ )); do
+                    local dist="${numa_matrix[s * num_vnodes + d]}"
+                    numa_payload+="<sibling id='${d}' value='${dist}'/>"
+                done
+                numa_payload+="</distances></cell>"
+            done
+            numa_payload+="</numa>"
+
+            # Generazione Payload Memnodes (<numatune>)
+            local numatune_payload=""
+
+            if [[ -n "${global_numa_nodes}" || -n "${memnodes_raw}" ]]; then
+                global_numa_mode="${global_numa_mode:-strict}"
+                numatune_payload="<numatune>"
+
+                if [[ -n "${global_numa_nodes}" ]]; then
+                    numatune_payload+="<memory mode='${global_numa_mode}' nodeset='${global_numa_nodes}'/>"
+                fi
+
+                if [[ -n "${memnodes_raw}" ]]; then
+                    local -a memnode_arr
+                    IFS=';' read -r -a memnode_arr <<< "${memnodes_raw}"
+                    local map v_node p_node
+                    for map in "${memnode_arr[@]}"; do
+                        v_node="${map%,*}"
+                        p_node="${map#*,}"
+                        numatune_payload+="<memnode cellid='${v_node}' mode='${global_numa_mode}' nodeset='${p_node}'/>"
+                    done
+                fi
+                numatune_payload+="</numatune>"
+            fi
+
+            # Iniezione AWK a passaggio singolo
+            awk -v numa="${numa_payload}" -v ntune="${numatune_payload}" '
+                /<numatune>/ { in_numatune=1; next }
+                /<\/numatune>/ { in_numatune=0; next }
+                in_numatune { next }
+
+                /<numa>/ { in_numa=1; next }
+                /<\/numa>/ { in_numa=0; next }
+                in_numa { next }
+
+                /<\/cpu>/ {
+                    print "    " numa;
+                    print $0;
+                    if (ntune != "") print "  " ntune;
+                    next
+                }
+                { print }
+            ' "${vnuma_xml}" > "${vnuma_xml}.new" && mv "${vnuma_xml}.new" "${vnuma_xml}"
+
+            virsh define "${vnuma_xml}" >/dev/null 2>&1 || {
+                echo "FATAL: Failed to define virtual NUMA topology for ${vm}. Check XML syntax/variables." >&2
+                rm -f "${vnuma_xml}"
+                return "${SHELLPACK_FAILURE}"
+            }
+            rm -f "${vnuma_xml}"
         fi
 
         # --- GLOBAL VM PINNING (CPUSPIN, CORESPIN, NODESPIN) ---
