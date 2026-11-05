@@ -1198,15 +1198,22 @@ function libvirt::tune_vms_offline() {
             local vcore
             for vcore in "${!core_arr[@]}"; do
                 local pcore="${core_arr[vcore]}"
-                if [[ "${pcore}" != "-" && -n "${host_cores[pcore]:-}" ]]; then
-                    # Intentional unquoted array expansion to split space-separated CPUs
+                if [[ "${pcore}" != "-" ]]; then
+                    if [[ -z "${host_cores[pcore]:-}" ]]; then
+                        echo "FATAL: Requested physical core '${pcore}' for vCore '${vcore}' does not exist on this host." >&2
+                        return "${SHELLPACK_FAILURE}"
+                    fi
+
                     local -a pcpus=(${host_cores[pcore]})
                     local t
                     for (( t=0; t<guest_threads; t++ )); do
                         local vcpu_idx=$(( vcore * guest_threads + t ))
                         local pcpu_idx="${pcpus[t]}"
                         if [[ -n "${pcpu_idx}" ]]; then
-                            virsh vcpupin "${vm}" "${vcpu_idx}" "${pcpu_idx}" --config >/dev/null 2>&1 || true
+                            virsh vcpupin "${vm}" "${vcpu_idx}" "${pcpu_idx}" --config >/dev/null 2>&1 || {
+                                echo "FATAL: Failed to pin vCPU ${vcpu_idx} to pCPU ${pcpu_idx} in ${vm}." >&2
+                                return "${SHELLPACK_FAILURE}"
+                            }
                         fi
                     done
                 fi
